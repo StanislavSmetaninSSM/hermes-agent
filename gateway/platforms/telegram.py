@@ -80,6 +80,7 @@ from gateway.platforms.base import (
     SUPPORTED_DOCUMENT_TYPES,
     SUPPORTED_IMAGE_DOCUMENT_TYPES,
     utf16_len,
+    _promote_latest_queued_text,
 )
 from gateway.platforms.telegram_network import (
     TelegramFallbackTransport,
@@ -5050,9 +5051,17 @@ class TelegramAdapter(BasePlatformAdapter):
             event._last_chunk_len = chunk_len  # type: ignore[attr-defined]
             self._pending_text_batches[key] = event
         else:
-            # Append text from the follow-up chunk
+            # Telegram text batching exists primarily for client-side splits of
+            # near-4096-char messages.  Short rapid follow-ups are separate
+            # chat messages: keep only the newest text active and preserve the
+            # older fragments as context so approvals like "do what you think
+            # is best" can refer back without re-activating the old request.
+            previous_chunk_len = getattr(existing, "_last_chunk_len", 0)
             if event.text:
-                existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+                if previous_chunk_len >= self._SPLIT_THRESHOLD:
+                    existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+                else:
+                    _promote_latest_queued_text(existing, event)
             existing._last_chunk_len = chunk_len  # type: ignore[attr-defined]
             # Merge any media that might be attached
             if event.media_urls:

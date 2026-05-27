@@ -59,43 +59,44 @@ class TestTextBatching:
         assert dispatched.text == "hello world"
 
     @pytest.mark.asyncio
-    async def test_split_messages_aggregated(self):
-        """Two rapid messages from the same chat should be merged."""
+    async def test_short_manual_followups_keep_latest_message_active(self):
+        """Short rapid Telegram messages are context, not one active prompt."""
         adapter = _make_adapter()
 
-        adapter._enqueue_text_event(_make_event("This is part one of a long"))
+        adapter._enqueue_text_event(_make_event("inspect the Feature branch"))
         await asyncio.sleep(0.02)  # small gap, within batch window
-        adapter._enqueue_text_event(_make_event("message that was split by Telegram."))
+        adapter._enqueue_text_event(_make_event("ping"))
+        await asyncio.sleep(0.02)
+        adapter._enqueue_text_event(_make_event("do what you think is best"))
 
-        # Not dispatched yet (timer restarted)
-        adapter.handle_message.assert_not_called()
-
-        # Wait for flush
         await asyncio.sleep(0.2)
 
         adapter.handle_message.assert_called_once()
         dispatched = adapter.handle_message.call_args[0][0]
-        assert "part one" in dispatched.text
-        assert "split by Telegram" in dispatched.text
+        assert dispatched.text == "do what you think is best"
+        assert "Queued context from earlier user messages" in dispatched.channel_context
+        assert "interpret references" in dispatched.channel_context
+        assert "approvals" in dispatched.channel_context
+        assert "inspect the Feature branch" in dispatched.channel_context
+        assert "ping" in dispatched.channel_context
+        assert "do what you think is best" not in dispatched.channel_context
 
     @pytest.mark.asyncio
-    async def test_three_way_split_aggregated(self):
-        """Three rapid messages should all merge."""
+    async def test_near_limit_client_split_stays_single_active_message(self):
+        """Near-4096 chunks are likely Telegram client splits and stay active."""
         adapter = _make_adapter()
+        first_chunk = "x" * 4000
 
-        adapter._enqueue_text_event(_make_event("chunk 1"))
+        adapter._enqueue_text_event(_make_event(first_chunk))
         await asyncio.sleep(0.02)
-        adapter._enqueue_text_event(_make_event("chunk 2"))
-        await asyncio.sleep(0.02)
-        adapter._enqueue_text_event(_make_event("chunk 3"))
+        adapter._enqueue_text_event(_make_event("tail of the same long message"))
 
         await asyncio.sleep(0.2)
 
         adapter.handle_message.assert_called_once()
-        text = adapter.handle_message.call_args[0][0].text
-        assert "chunk 1" in text
-        assert "chunk 2" in text
-        assert "chunk 3" in text
+        dispatched = adapter.handle_message.call_args[0][0]
+        assert dispatched.text == f"{first_chunk}\ntail of the same long message"
+        assert dispatched.channel_context is None
 
     @pytest.mark.asyncio
     async def test_different_chats_not_merged(self):

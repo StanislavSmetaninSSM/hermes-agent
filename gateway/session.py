@@ -289,6 +289,24 @@ def build_session_context_prompt(
             desc = src.description
         lines.append(f"**Source:** {platform_name} ({desc})")
 
+    lines.append(
+        "**Dialogue focus:** Treat the latest chat message from the user as "
+        "the active request. Earlier user messages are context only: use them "
+        "to interpret references, approvals, or corrections in the latest "
+        "message, but do not answer or re-process multiple prior turns as "
+        "separate requests unless the latest message explicitly asks for that."
+    )
+    lines.append(
+        "**Continuation approvals:** If the latest message is a short approval "
+        "or continuation such as `делай`, `согласен`, `продолжай`, `как считаешь "
+        "нужным`, `do it`, `go ahead`, or `continue`, execute the most recent "
+        "relevant assistant plan or user-approved task visible in context. Do "
+        "not re-analyze or re-plan from scratch; perform only the minimal "
+        "safety/state check needed before execution. If the referenced plan is "
+        "not visible in the current topic/session context, retrieve that plan "
+        "from session/topic history before broad analysis or asking the user."
+    )
+
     # Channel topic (if available - provides context about the channel's purpose)
     if context.source.chat_topic:
         lines.append(f"**Channel Topic:** {context.source.chat_topic}")

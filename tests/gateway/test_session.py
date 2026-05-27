@@ -194,6 +194,51 @@ class TestBuildSessionContextPrompt:
         assert "Telegram" in prompt
         assert "Home Chat" in prompt
 
+    def test_prompt_declares_latest_chat_message_as_active_request(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.TELEGRAM: PlatformConfig(enabled=True, token="fake-token"),
+            },
+        )
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="111",
+            chat_name="Home Chat",
+            chat_type="dm",
+        )
+
+        ctx = build_session_context(source, config)
+        prompt = build_session_context_prompt(ctx)
+
+        assert "latest chat message" in prompt.lower()
+        assert "active request" in prompt.lower()
+        assert "earlier user messages" in prompt.lower()
+        assert "interpret references" in prompt.lower()
+        assert "approvals" in prompt.lower()
+
+    def test_prompt_declares_approval_followups_execute_existing_plan(self):
+        config = GatewayConfig(
+            platforms={
+                Platform.TELEGRAM: PlatformConfig(enabled=True, token="fake-token"),
+            },
+        )
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="111",
+            chat_name="Home Chat",
+            chat_type="dm",
+        )
+
+        ctx = build_session_context(source, config)
+        prompt = build_session_context_prompt(ctx).lower()
+
+        assert "делай" in prompt
+        assert "согласен" in prompt
+        assert "продолжай" in prompt
+        assert "как считаешь нужным" in prompt
+        assert "execute the most recent relevant assistant plan" in prompt
+        assert "do not re-analyze" in prompt
+
     def test_bluebubbles_prompt_mentions_short_conversational_i_message_format(self):
         config = GatewayConfig(
             platforms={

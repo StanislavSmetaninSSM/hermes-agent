@@ -90,7 +90,12 @@ def test_repair_merges_consecutive_user_messages():
     assert repairs == 1
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    assert messages[0]["content"] == "first\n\nsecond"
+    content = messages[0]["content"]
+    assert "Earlier consecutive user message(s)" in content
+    assert "context only" in content
+    assert "first" in content
+    assert "Latest user message" in content
+    assert content.endswith("second")
 
 
 def test_repair_preserves_user_content_when_one_side_empty():
@@ -163,7 +168,11 @@ def test_repair_leaves_valid_conversation_unchanged():
 
 
 def test_repair_preserves_multimodal_user_content():
-    """Multimodal (list) content must NOT be merged — risks mangling attachments."""
+    """Multimodal content can be collapsed without dropping attachments.
+
+    Older content is marked context-only and the newest user message remains
+    explicitly labelled as the active request.
+    """
     agent = _bare_agent()
     messages = [
         {"role": "user", "content": [{"type": "text", "text": "hi"},
@@ -171,11 +180,21 @@ def test_repair_preserves_multimodal_user_content():
         {"role": "user", "content": "follow-up"},
     ]
 
-    AIAgent._repair_message_sequence(agent, messages)
+    repairs = AIAgent._repair_message_sequence(agent, messages)
 
-    # The multimodal user message stays as a distinct message — no merge
-    assert len(messages) == 2
-    assert isinstance(messages[0]["content"], list)
+    assert repairs == 1
+    assert len(messages) == 1
+    content = messages[0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    assert "Earlier consecutive user message(s)" in content[0]["text"]
+    assert {"type": "text", "text": "hi"} in content
+    assert {"type": "image_url", "image_url": {"url": "..."}} in content
+    assert any(
+        block.get("type") == "text" and "Latest user message" in block.get("text", "")
+        for block in content
+    )
+    assert content[-1] == {"type": "text", "text": "follow-up"}
 
 
 def test_repair_empty_messages_returns_zero():

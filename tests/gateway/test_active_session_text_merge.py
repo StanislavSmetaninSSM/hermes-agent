@@ -1,10 +1,12 @@
 """Regression tests for active-session TEXT follow-up queueing.
 
 When the agent is actively running, rapid text follow-ups should survive as
-one next-turn pending message instead of clobbering each other. In
-``busy_text_mode=queue`` those active follow-ups first pass through a short
-debounce so bursty multi-message thoughts are merged before the active drain
-hands off the next turn.
+one next-turn pending message instead of clobbering each other. The latest
+message must remain the active request, while earlier burst fragments are
+preserved as context-only material so the agent does not answer/re-plan for
+multiple old user messages at once. In ``busy_text_mode=queue`` those active
+follow-ups first pass through a short debounce before the active drain hands
+off the next turn.
 """
 
 from __future__ import annotations
@@ -116,8 +118,8 @@ def _debounced_event(adapter: BasePlatformAdapter, session_key: str) -> MessageE
 
 
 @pytest.mark.asyncio
-async def test_rapid_text_followups_accumulate_instead_of_replacing():
-    """Rapid TEXT follow-ups must all survive in the pending event."""
+async def test_rapid_text_followups_keep_latest_as_active_request():
+    """Rapid TEXT follow-ups preserve earlier text as context-only."""
     adapter = _make_adapter()
     adapter._busy_text_mode = ""  # direct-merge behavior, no debounce
     first = _make_event("part one")
@@ -128,7 +130,10 @@ async def test_rapid_text_followups_accumulate_instead_of_replacing():
     await adapter.handle_message(_make_event("part three"))
 
     pending = adapter._pending_messages[session_key]
-    assert pending.text == "part two\npart three"
+    assert pending.text == "part three"
+    assert "Queued context from earlier user messages" in pending.channel_context
+    assert "part two" in pending.channel_context
+    assert "part three" not in pending.channel_context
     assert not adapter._active_sessions[session_key].is_set()
 
 
@@ -147,12 +152,17 @@ async def test_debounce_buffers_rapid_text_then_flushes_to_pending():
     assert session_key not in adapter._pending_messages
 
     await adapter.handle_message(_make_event("part three"))
-    assert _debounced_event(adapter, session_key).text == "part two\npart three"
+    assert _debounced_event(adapter, session_key).text == "part three"
+    assert "Queued context from earlier user messages" in _debounced_event(adapter, session_key).channel_context
+    assert "part two" in _debounced_event(adapter, session_key).channel_context
 
     await asyncio.sleep(0.15)
 
     assert session_key not in adapter._text_debounce
-    assert adapter._pending_messages[session_key].text == "part two\npart three"
+    pending = adapter._pending_messages[session_key]
+    assert pending.text == "part three"
+    assert "part two" in pending.channel_context
+    assert "part three" not in pending.channel_context
 
 
 @pytest.mark.asyncio
@@ -184,7 +194,12 @@ async def test_debounce_resets_timer_on_new_arrival():
 
     await asyncio.sleep(0.2)
     assert session_key not in adapter._text_debounce
-    assert adapter._pending_messages[session_key].text == "one\ntwo\nthree"
+    pending = adapter._pending_messages[session_key]
+    assert pending.text == "three"
+    assert "Queued context from earlier user messages" in pending.channel_context
+    assert "one" in pending.channel_context
+    assert "two" in pending.channel_context
+    assert "three" not in pending.channel_context
 
 
 @pytest.mark.asyncio

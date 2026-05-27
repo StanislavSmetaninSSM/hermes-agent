@@ -469,6 +469,69 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 )
                 continue
             raise
+        except TypeError as exc:
+            err_text = str(exc)
+            # Some OpenAI SDK builds crash while accumulating a completed
+            # Responses stream when the terminal response object has
+            # ``output=None``. The raw stream is still readable through the
+            # create(stream=True) fallback, so handle this like the existing
+            # completion/postlude stream-state failures above.
+            response_output_none = (
+                "NoneType" in err_text and "iterable" in err_text
+            )
+            if response_output_none and collected_output_items:
+                logger.debug(
+                    "Responses stream parser saw response.output=None; "
+                    "recovering from %d collected output items. %s",
+                    len(collected_output_items),
+                    agent._client_log_context(),
+                )
+                return SimpleNamespace(
+                    status="completed",
+                    output=list(collected_output_items),
+                    output_text="".join(agent._codex_streamed_text_parts),
+                )
+            if response_output_none and agent._codex_streamed_text_parts and not has_tool_calls:
+                assembled = "".join(agent._codex_streamed_text_parts)
+                logger.debug(
+                    "Responses stream parser saw response.output=None; "
+                    "synthesizing final response from %d text deltas (%d chars). %s",
+                    len(agent._codex_streamed_text_parts),
+                    len(assembled),
+                    agent._client_log_context(),
+                )
+                return SimpleNamespace(
+                    status="completed",
+                    output=[
+                        SimpleNamespace(
+                            type="message",
+                            role="assistant",
+                            status="completed",
+                            content=[
+                                SimpleNamespace(type="output_text", text=assembled)
+                            ],
+                        )
+                    ],
+                    output_text=assembled,
+                )
+            if response_output_none and attempt < max_stream_retries:
+                logger.debug(
+                    "Responses stream parser saw response.output=None "
+                    "(attempt %s/%s); retrying. %s",
+                    attempt + 1,
+                    max_stream_retries + 1,
+                    agent._client_log_context(),
+                )
+                continue
+            if response_output_none:
+                logger.debug(
+                    "Responses stream parser saw response.output=None; "
+                    "falling back to create(stream=True). %s err=%s",
+                    agent._client_log_context(),
+                    err_text,
+                )
+                return agent._run_codex_create_stream_fallback(api_kwargs, client=active_client)
+            raise
 
         try:
             # Compatibility: some mocks/providers return a concrete response

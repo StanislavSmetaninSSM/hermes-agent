@@ -523,7 +523,7 @@ class ContextCompressor(ContextEngine):
         config_context_length: int | None = None,
         provider: str = "",
         api_mode: str = "",
-        abort_on_summary_failure: bool = False,
+        abort_on_summary_failure: bool = True,
     ):
         self.model = model
         self.base_url = base_url
@@ -537,7 +537,7 @@ class ContextCompressor(ContextEngine):
         self.quiet_mode = quiet_mode
         # When True, summary-generation failure aborts compression entirely
         # (returns messages unchanged, sets _last_compress_aborted=True).
-        # When False (default = historical behavior), insert a static
+        # When False (legacy opt-out), insert a static
         # "summary unavailable" placeholder and drop the middle window.
         self.abort_on_summary_failure = abort_on_summary_failure
 
@@ -1613,7 +1613,9 @@ The user has requested that this compaction PRIORITISE preserving all informatio
         #           middle window.  Records _last_summary_fallback_used /
         #           _last_summary_dropped_count for gateway hygiene to
         #           surface a warning.
-        # Default is False (historical behavior).
+        # Default is True: preserving the exact transcript is safer than
+        # silently dropping the plan that a short continuation message may
+        # be approving ("continue", "do what you planned").
         if not summary and self.abort_on_summary_failure:
             n_skipped = compress_end - compress_start
             self._last_summary_dropped_count = 0  # nothing actually dropped
@@ -1654,10 +1656,11 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             self._last_summary_fallback_used = True
             summary = (
                 f"{SUMMARY_PREFIX}\n"
-                f"Summary generation was unavailable. {n_dropped} message(s) were "
-                f"removed to free context space but could not be summarized. The removed "
-                f"messages contained earlier work in this session. Continue based on the "
-                f"recent messages below and the current state of any files or resources."
+                f"Summary generation was unavailable. {n_dropped} earlier message(s) were "
+                f"removed to free context space but could not be summarized. This fallback "
+                f"marker contains no active user request and no actionable plan. Respond "
+                f"only to the latest user message after this marker; use the surviving "
+                f"recent transcript and current file/resource state only as context."
             )
 
         _merge_summary_into_tail = False

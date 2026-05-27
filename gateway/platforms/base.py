@@ -1328,6 +1328,68 @@ class EphemeralReply(str):
         return str.__str__(self)
 
 
+_QUEUED_TEXT_CONTEXT_HEADER = (
+    "[Queued context from earlier user messages. These messages are reference only: "
+    "use them to interpret references, approvals, or corrections in [New message], "
+    "but do not answer them as separate active requests. If [New message] is a "
+    "short approval/continuation like 'делай', 'согласен', 'продолжай', or "
+    "'как считаешь нужным', execute the most recent relevant assistant plan; "
+    "do not re-analyze from scratch.]"
+)
+
+
+def _append_queued_text_context(event: MessageEvent, prior_text: str | None) -> None:
+    """Move an older queued text fragment into ``event.channel_context``.
+
+    Busy text follow-ups are delivered as a single follow-up turn, but a raw
+    ``old\nnew`` merge makes both fragments look equally active to the model.
+    Keep the newest text in ``event.text`` and preserve older fragments in a
+    clearly-labelled context block so the next run can use them for reference
+    without answering/re-planning each one as a fresh request.
+    """
+    text = (prior_text or "").strip()
+    if not text:
+        return
+
+    existing_context = (getattr(event, "channel_context", None) or "").rstrip()
+    queued_block = f"[Earlier queued message]\n{text}"
+    if existing_context:
+        if _QUEUED_TEXT_CONTEXT_HEADER in existing_context:
+            event.channel_context = f"{existing_context}\n\n{queued_block}"
+        else:
+            event.channel_context = (
+                f"{existing_context}\n\n{_QUEUED_TEXT_CONTEXT_HEADER}\n{queued_block}"
+            )
+    else:
+        event.channel_context = f"{_QUEUED_TEXT_CONTEXT_HEADER}\n{queued_block}"
+
+
+def _promote_latest_queued_text(existing: MessageEvent, event: MessageEvent) -> None:
+    """Preserve ``existing.text`` as context and make ``event.text`` active."""
+    _append_queued_text_context(existing, existing.text)
+    if getattr(event, "channel_context", None):
+        incoming_context = str(event.channel_context).strip()
+        if incoming_context:
+            existing_context = (existing.channel_context or "").rstrip()
+            existing.channel_context = (
+                f"{existing_context}\n\n{incoming_context}"
+                if existing_context else incoming_context
+            )
+    existing.text = event.text or ""
+    if event.message_id is not None:
+        existing.message_id = str(event.message_id)
+    latest_anchor = event.reply_to_message_id or event.message_id
+    if latest_anchor is not None:
+        existing.reply_to_message_id = str(latest_anchor)
+    if event.reply_to_text is not None:
+        existing.reply_to_text = event.reply_to_text
+    if event.platform_update_id is not None:
+        existing.platform_update_id = event.platform_update_id
+    existing.timestamp = event.timestamp
+    existing.auto_skill = event.auto_skill or existing.auto_skill
+    existing.channel_prompt = event.channel_prompt or existing.channel_prompt
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -1341,10 +1403,11 @@ def merge_pending_message_event(
     events. Merge those into the existing queued event so the next turn sees
     the whole burst.
 
-    When ``merge_text`` is enabled, rapid follow-up TEXT events are appended
-    instead of replacing the pending turn. This is used for Telegram bursty
-    follow-ups so a multi-part user thought is not silently truncated to only
-    the last queued fragment.
+    When ``merge_text`` is enabled, rapid follow-up TEXT events preserve older
+    fragments as context-only material while keeping the latest fragment in
+    ``event.text`` as the active request. This is used for Telegram bursty
+    follow-ups so a multi-part user thought is not silently truncated, without
+    making the model answer several already-superseded user messages at once.
     """
     existing = pending_messages.get(session_key)
     if existing:
@@ -1384,7 +1447,7 @@ def merge_pending_message_event(
             and event.message_type == MessageType.TEXT
         ):
             if event.text:
-                existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+                _promote_latest_queued_text(existing, event)
             return
 
     pending_messages[session_key] = event
@@ -2957,17 +3020,7 @@ class BasePlatformAdapter(ABC):
             store[session_key] = state
         else:
             if event.text:
-                state.event.text = (
-                    f"{state.event.text}\n{event.text}"
-                    if state.event.text
-                    else event.text
-                )
-            latest_message_id = getattr(event, "message_id", None)
-            latest_anchor = latest_message_id or getattr(event, "reply_to_message_id", None)
-            if latest_message_id is not None:
-                state.event.message_id = str(latest_message_id)
-            if latest_anchor is not None and hasattr(state.event, "reply_to_message_id"):
-                state.event.reply_to_message_id = str(latest_anchor)
+                _promote_latest_queued_text(state.event, event)
             state.last_ts = now
 
         if state.task is not None and not state.task.done():

@@ -54,6 +54,65 @@ def _ra():
     return run_agent
 
 
+_CONTEXT_ONLY_USER_RUN_HEADER = (
+    "[Earlier consecutive user message(s) — context only. Use them only to "
+    "interpret the latest user message; do not answer them as separate active "
+    "requests. If the latest user message is a short approval/continuation "
+    "like 'делай', 'согласен', 'продолжай', or 'как считаешь нужным', execute "
+    "the most recent relevant assistant plan; do not re-analyze from scratch.]"
+)
+_ACTIVE_USER_RUN_HEADER = "[Latest user message — active request]"
+
+
+
+def _text_block(text: str) -> Dict[str, str]:
+    return {"type": "text", "text": text}
+
+
+def _merge_adjacent_user_content_context_only(previous: Any, latest: Any) -> Any:
+    """Collapse adjacent user messages while marking only the newest active.
+
+    Provider APIs generally reject consecutive user-role messages, so Hermes
+    must collapse them before the request. A raw newline merge makes stale
+    follow-ups look like equal current instructions. This helper preserves the
+    older text as context-only and labels the newest user message as the active
+    request, which matches Telegram/Slack follow-up semantics.
+    """
+    if isinstance(previous, str) and isinstance(latest, str):
+        previous_text = previous.strip() if previous else ""
+        latest_text = latest.strip() if latest else ""
+        if previous_text and latest_text:
+            return (
+                f"{_CONTEXT_ONLY_USER_RUN_HEADER}\n"
+                f"{previous_text}\n\n"
+                f"{_ACTIVE_USER_RUN_HEADER}\n"
+                f"{latest_text}"
+            )
+        return previous_text or latest_text
+
+    previous_blocks: List[Any]
+    if isinstance(previous, list):
+        previous_blocks = list(previous)
+    elif previous:
+        previous_blocks = [_text_block(str(previous))]
+    else:
+        previous_blocks = []
+
+    latest_blocks: List[Any]
+    if isinstance(latest, list):
+        latest_blocks = list(latest)
+    elif latest:
+        latest_blocks = [_text_block(str(latest))]
+    else:
+        latest_blocks = []
+
+    return [
+        _text_block(_CONTEXT_ONLY_USER_RUN_HEADER),
+        *previous_blocks,
+        _text_block(_ACTIVE_USER_RUN_HEADER),
+        *latest_blocks,
+    ]
+
 
 def convert_to_trajectory_format(agent, messages: List[Dict[str, Any]], user_query: str, completed: bool) -> List[Dict[str, Any]]:
     """
@@ -402,8 +461,10 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
                 known_tool_ids = set()
             filtered.append(msg)
 
-    # Pass 2: merge consecutive user messages. Preserves all user input
-    # so nothing the user typed is lost.
+    # Pass 2: collapse consecutive user messages. Older messages in the
+    # run are preserved as context-only; only the newest message is marked
+    # as the active request. A raw newline merge reactivates stale queued
+    # prompts when the latest message is just an approval such as "continue".
     merged: List[Dict] = []
     for msg in filtered:
         if (
@@ -414,19 +475,12 @@ def repair_message_sequence(agent, messages: List[Dict]) -> int:
             and merged[-1].get("role") == "user"
         ):
             prev = merged[-1]
-            prev_content = prev.get("content", "")
-            new_content = msg.get("content", "")
-            # Only merge plain-text content; leave multimodal (list)
-            # content alone — collapsing image/audio blocks risks
-            # mangling the attachment structure.
-            if isinstance(prev_content, str) and isinstance(new_content, str):
-                prev["content"] = (
-                    (prev_content + "\n\n" + new_content)
-                    if prev_content and new_content
-                    else (prev_content or new_content)
-                )
-                repairs += 1
-                continue
+            prev["content"] = _merge_adjacent_user_content_context_only(
+                prev.get("content", ""),
+                msg.get("content", ""),
+            )
+            repairs += 1
+            continue
         merged.append(msg)
 
     if repairs > 0:
@@ -783,7 +837,7 @@ def try_recover_primary_transport(
 def drop_thinking_only_and_merge_users(
     messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Drop thinking-only assistant turns; merge any adjacent user messages left behind.
+    """Drop thinking-only assistant turns; collapse adjacent user messages.
 
     Runs on the per-call ``api_messages`` copy only. The stored
     conversation history (``agent.messages``) is never mutated, so the
@@ -791,13 +845,9 @@ def drop_thinking_only_and_merge_users(
     session persistence keeps the full trace. Only the wire copy sent to
     the provider is cleaned.
 
-    Why drop-and-merge rather than inject stub text:
-    - Fabricating ``"."`` / ``"(continued)"`` text lies in the history
-      and makes future turns see model output the model didn't emit.
-    - Dropping the turn preserves honesty; merging adjacent user messages
-      preserves the provider's role-alternation invariant.
-    - This is the pattern used by Claude Code's ``normalizeMessagesForAPI``
-      (filterOrphanedThinkingOnlyMessages + mergeAdjacentUserMessages).
+    Older adjacent user messages are retained as context-only, while the
+    newest one is labeled as the active request. This preserves provider
+    role alternation without reactivating stale prompts.
     """
     if not messages:
         return messages
