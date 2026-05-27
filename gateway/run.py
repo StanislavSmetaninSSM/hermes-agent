@@ -7241,6 +7241,8 @@ class GatewayRunner:
                     return await self._handle_profile_command(event)
                 if _cmd_def_inner.name == "update":
                     return await self._handle_update_command(event)
+                if _cmd_def_inner.name == "update_custom":
+                    return await self._handle_update_custom_command(event)
 
             # Catch-all: any other recognized slash command reached the
             # running-agent guard. Reject gracefully rather than falling
@@ -7584,6 +7586,9 @@ class GatewayRunner:
 
         if canonical == "update":
             return await self._handle_update_command(event)
+
+        if canonical == "update_custom":
+            return await self._handle_update_custom_command(event)
 
         if canonical == "debug":
             return await self._handle_debug_command(event)
@@ -14090,6 +14095,145 @@ class GatewayRunner:
 
         self._schedule_update_notification_watch()
         return t("gateway.update.starting")
+
+    async def _handle_update_custom_command(self, event: MessageEvent) -> str:
+        """Handle /update_custom — merge upstream main into the local custom branch."""
+        import json
+        import shutil
+        import subprocess
+        from datetime import datetime
+        from hermes_cli.config import is_managed, format_managed_message
+
+        platform = event.source.platform
+        _allowed = self._UPDATE_ALLOWED_PLATFORMS
+        if platform not in _allowed:
+            try:
+                from gateway.platform_registry import platform_registry
+                entry = platform_registry.get(platform.value)
+                if not entry or not entry.allow_update_command:
+                    return t("gateway.update.platform_not_messaging")
+            except Exception:
+                return t("gateway.update.platform_not_messaging")
+
+        if is_managed():
+            return f"✗ {format_managed_message('update Hermes Agent')}"
+
+        project_root = Path(__file__).parent.parent.resolve()
+        script = project_root / "scripts" / "update-stanislav-hermes.sh"
+        if not script.exists():
+            return f"✗ Custom update script not found: `{script}`"
+        if not (project_root / ".git").exists():
+            return t("gateway.update.not_git_repo")
+
+        raw_args = (event.get_command_args() or "").strip()
+        normalized_args = raw_args.lower().replace("_", "-")
+        arg_tokens = {token.strip() for token in shlex.split(normalized_args) if token.strip()} if normalized_args else set()
+        check_only = bool(arg_tokens & {"check", "dry-run", "status"})
+        no_restart = bool(arg_tokens & {"no-restart", "no-gateway-restart"})
+        script_args: list[str] = ["--yes"]
+        if check_only:
+            script_args.append("--dry-run")
+        if "no-tests" in arg_tokens:
+            script_args.append("--no-tests")
+        if "install-deps" in arg_tokens:
+            script_args.append("--install-deps")
+        if "no-push" in arg_tokens:
+            script_args.append("--no-push")
+        if not check_only and not no_restart:
+            script_args.append("--restart-gateway")
+
+        pending_path = _hermes_home / ".update_pending.json"
+        output_path = _hermes_home / ".update_output.txt"
+        exit_code_path = _hermes_home / ".update_exit_code"
+        session_key = self._session_key_for_source(event.source)
+        pending = {
+            "platform": event.source.platform.value,
+            "chat_id": event.source.chat_id,
+            "user_id": event.source.user_id,
+            "session_key": session_key,
+            "timestamp": datetime.now().isoformat(),
+        }
+        if event.source.thread_id:
+            pending["thread_id"] = event.source.thread_id
+        _tmp_pending = pending_path.with_suffix(".tmp")
+        _tmp_pending.write_text(json.dumps(pending))
+        _tmp_pending.replace(pending_path)
+        exit_code_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+        try:
+            if sys.platform == "win32":
+                import textwrap
+                from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
+
+                bash = shutil.which("bash")
+                if not bash:
+                    pending_path.unlink(missing_ok=True)
+                    return "✗ Git Bash / bash is required to run `/update_custom` on Windows."
+                helper = textwrap.dedent(
+                    """
+                    import os, subprocess, sys
+                    output_path = sys.argv[1]
+                    exit_code_path = sys.argv[2]
+                    check_only = sys.argv[3] == "1"
+                    cmd = sys.argv[4:]
+                    env = dict(os.environ)
+                    env["PYTHONUNBUFFERED"] = "1"
+                    with open(output_path, "wb") as f:
+                        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
+                        rc = proc.wait()
+                    if check_only and rc == 10:
+                        rc = 0
+                    with open(exit_code_path, "w") as f:
+                        f.write(str(rc))
+                    """
+                ).strip()
+                subprocess.Popen(
+                    [
+                        sys.executable, "-c", helper,
+                        str(output_path), str(exit_code_path),
+                        "1" if check_only else "0",
+                        bash, str(script), *script_args,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    **windows_detach_popen_kwargs(),
+                )
+            else:
+                cmd_parts = [str(script), *script_args]
+                if not os.access(script, os.X_OK):
+                    cmd_parts = ["bash", *cmd_parts]
+                cmd_str = " ".join(shlex.quote(part) for part in cmd_parts)
+                remap_check_rc = "if [ \"$rc\" = 10 ]; then rc=0; fi; " if check_only else ""
+                update_cmd = (
+                    f"PYTHONUNBUFFERED=1 {cmd_str}"
+                    f" > {shlex.quote(str(output_path))} 2>&1; "
+                    f"rc=$?; {remap_check_rc}printf '%s' \"$rc\" > {shlex.quote(str(exit_code_path))}"
+                )
+                setsid_bin = shutil.which("setsid")
+                if setsid_bin:
+                    subprocess.Popen(
+                        [setsid_bin, "bash", "-c", update_cmd],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                else:
+                    subprocess.Popen(
+                        ["bash", "-c", update_cmd],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+        except Exception as e:
+            pending_path.unlink(missing_ok=True)
+            exit_code_path.unlink(missing_ok=True)
+            return t("gateway.update.start_failed", error=e)
+
+        self._schedule_update_notification_watch()
+        if check_only:
+            return "Checking custom Hermes branch for upstream updates..."
+        return "Starting custom Hermes update: merging `origin/main` into `stanislav/hermes-local-fixes`. Progress will be streamed here."
 
     def _schedule_update_notification_watch(self) -> None:
         """Ensure a background task is watching for update completion."""

@@ -215,6 +215,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("image", "Attach a local image file for your next prompt", "Info",
                cli_only=True, args_hint="<path>"),
     CommandDef("update", "Update Hermes Agent to the latest version", "Info"),
+    CommandDef(
+        "update_custom",
+        "Update Stanislav's custom Hermes branch",
+        "Info",
+        aliases=("update-custom", "update-stanislav", "update_stanislav", "hupdate"),
+        cli_only=True,
+        gateway_config_gate="updates.custom_command_enabled",
+    ),
     CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info"),
 
     # Exit
@@ -348,6 +356,7 @@ ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
         "steer",
         "stop",
         "update",
+        "update_custom",
     }
 )
 
@@ -523,6 +532,7 @@ _TELEGRAM_MENU_PRIORITY = (
     "debug",
     "restart",
     "update",
+    "update_custom",
     "verbose",
     "commands",
     # Mid-turn session control.

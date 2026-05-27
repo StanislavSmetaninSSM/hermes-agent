@@ -8711,6 +8711,52 @@ def cmd_update(args):
         _finalize_update_output(_update_io_state)
 
 
+def cmd_update_custom(args):
+    """Update Stanislav's custom Hermes branch.
+
+    This is intentionally separate from ``hermes update``.  The stock updater
+    targets ``origin/<branch>`` (default ``origin/main``); this installation
+    keeps local fixes on a long-lived branch and updates by merging
+    ``origin/main`` into ``stanislav/hermes-local-fixes``.
+    """
+    script = PROJECT_ROOT / "scripts" / "update-stanislav-hermes.sh"
+    if not script.exists():
+        print(f"✗ Custom update script not found: {script}")
+        sys.exit(1)
+
+    if sys.platform == "win32":
+        bash = shutil.which("bash")
+        if not bash:
+            print("✗ Git Bash / bash is required to run the custom update script on Windows.")
+            sys.exit(1)
+        cmd = [bash, str(script)]
+    else:
+        cmd = [str(script)] if os.access(script, os.X_OK) else ["bash", str(script)]
+
+    check_only = bool(getattr(args, "check", False) or getattr(args, "dry_run", False))
+    if check_only:
+        cmd.append("--dry-run")
+    if getattr(args, "no_tests", False):
+        cmd.append("--no-tests")
+    if getattr(args, "install_deps", False):
+        cmd.append("--install-deps")
+    if getattr(args, "no_push", False):
+        cmd.append("--no-push")
+    if getattr(args, "restart_gateway", False):
+        cmd.append("--restart-gateway")
+    if getattr(args, "yes", False):
+        cmd.append("--yes")
+
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+    # The shell script returns 10 for "dry-run found updates" so automation can
+    # distinguish "nothing to do" from "updates available".  For the CLI check
+    # command that is an informational success, not an error.
+    if result.returncode == 10 and check_only:
+        return
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+
 def _cmd_update_pip(args):
     """Update Hermes via pip (for PyPI installs)."""
     from hermes_cli import __version__
@@ -13535,6 +13581,59 @@ Examples:
         help="Windows: proceed with the update even when another hermes.exe is detected. The concurrent process will likely cause WinError 32 warnings and may leave a reboot-deferred .exe replacement.",
     )
     update_parser.set_defaults(func=cmd_update)
+
+    # =========================================================================
+    # update-custom command
+    # =========================================================================
+    update_custom_parser = subparsers.add_parser(
+        "update-custom",
+        aliases=["update-local", "update-stanislav"],
+        help="Update Stanislav's custom Hermes branch",
+        description=(
+            "Merge upstream origin/main into stanislav/hermes-local-fixes, "
+            "run the custom regression suite, and push the branch to the fork."
+        ),
+    )
+    update_custom_parser.add_argument(
+        "--check",
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=False,
+        help="Check whether upstream main has new commits without merging",
+    )
+    update_custom_parser.add_argument(
+        "--no-tests",
+        action="store_true",
+        default=False,
+        help="Skip targeted regression tests",
+    )
+    update_custom_parser.add_argument(
+        "--install-deps",
+        action="store_true",
+        default=False,
+        help="Reinstall the editable Hermes package after merging",
+    )
+    update_custom_parser.add_argument(
+        "--no-push",
+        action="store_true",
+        default=False,
+        help="Do not push the custom branch to the fork",
+    )
+    update_custom_parser.add_argument(
+        "--restart-gateway",
+        action="store_true",
+        default=False,
+        help="Restart the Hermes gateway after a successful update",
+    )
+    update_custom_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        default=False,
+        help="Assume yes for merge confirmation prompts",
+    )
+    update_custom_parser.set_defaults(func=cmd_update_custom)
 
     # =========================================================================
     # uninstall command
