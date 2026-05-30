@@ -32,6 +32,7 @@ INSTALL_DEPS=0
 RESTART_GATEWAY=0
 DRY_RUN=0
 YES=0
+PRE_UPDATE_BACKUP_BRANCH=""
 
 usage() {
   cat <<'USAGE'
@@ -143,6 +144,23 @@ restart_gateway() {
   hermes gateway restart
 }
 
+create_pre_update_backup() {
+  local stamp safe_local_branch
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  safe_local_branch="${LOCAL_BRANCH//\//-}"
+  PRE_UPDATE_BACKUP_BRANCH="backup/${safe_local_branch}-pre-update-${stamp}"
+
+  say "→ Creating pre-update backup branch: $PRE_UPDATE_BACKUP_BRANCH"
+  run git branch "$PRE_UPDATE_BACKUP_BRANCH" HEAD
+
+  if [[ "$PUSH" -eq 1 ]]; then
+    say "→ Pushing pre-update backup branch to fork..."
+    run git push "$FORK_REMOTE" "$PRE_UPDATE_BACKUP_BRANCH:refs/heads/$PRE_UPDATE_BACKUP_BRANCH"
+  else
+    say "→ Backup branch push skipped because --no-push was set."
+  fi
+}
+
 require_clean_tree
 ensure_remote "$UPSTREAM_REMOTE" "$OFFICIAL_URL"
 ensure_remote "$FORK_REMOTE" "$FORK_URL"
@@ -194,9 +212,14 @@ else
     esac
   fi
 
+  create_pre_update_backup
+
   say "→ Merging upstream main into custom branch..."
   if ! git merge --no-edit "$upstream_ref"; then
     say "✗ Merge conflict. Resolve conflicts, run tests, then commit and push."
+    if [[ -n "$PRE_UPDATE_BACKUP_BRANCH" ]]; then
+      say "  Pre-merge backup branch: $PRE_UPDATE_BACKUP_BRANCH"
+    fi
     say "  Abort if needed: git merge --abort"
     exit 20
   fi
