@@ -1150,12 +1150,20 @@ class TestBuildSystemPrompt:
 class TestToolUseEnforcementConfig:
     """Tests for the agent.tool_use_enforcement config option."""
 
-    def _make_agent(self, model="openai/gpt-4.1", tool_use_enforcement="auto"):
+    def _make_agent(
+        self,
+        model="openai/gpt-4.1",
+        tool_use_enforcement="auto",
+        *,
+        provider=None,
+        base_url="https://openrouter.ai/api/v1",
+        tool_names=("terminal", "web_search"),
+    ):
         """Create an agent with tools and a specific enforcement config."""
         with (
             patch(
                 "run_agent.get_tool_definitions",
-                return_value=_make_tool_defs("terminal", "web_search"),
+                return_value=_make_tool_defs(*tool_names),
             ),
             patch("run_agent.check_toolset_requirements", return_value={}),
             patch("run_agent.OpenAI"),
@@ -1166,8 +1174,9 @@ class TestToolUseEnforcementConfig:
         ):
             a = AIAgent(
                 model=model,
+                provider=provider,
                 api_key="test-key-1234567890",
-                base_url="https://openrouter.ai/api/v1",
+                base_url=base_url,
                 quiet_mode=True,
                 skip_context_files=True,
                 skip_memory=True,
@@ -1186,6 +1195,39 @@ class TestToolUseEnforcementConfig:
         agent = self._make_agent(model="openai/codex-mini", tool_use_enforcement="auto")
         prompt = agent._build_system_prompt()
         assert TOOL_USE_ENFORCEMENT_GUIDANCE in prompt
+
+    def test_openai_model_injects_codex_delegation_guidance(self):
+        from agent.prompt_builder import CODEX_DELEGATION_GUIDANCE
+        agent = self._make_agent(model="openai/gpt-5.5", tool_use_enforcement="auto")
+        prompt = agent._build_system_prompt()
+        assert CODEX_DELEGATION_GUIDANCE in prompt
+
+    def test_openai_codex_provider_injects_codex_delegation_guidance(self):
+        from agent.prompt_builder import CODEX_DELEGATION_GUIDANCE
+        agent = self._make_agent(
+            model="gpt-5.5",
+            provider="openai-codex",
+            base_url="https://chatgpt.com/backend-api/codex",
+            tool_use_enforcement="auto",
+        )
+        prompt = agent._build_system_prompt()
+        assert CODEX_DELEGATION_GUIDANCE in prompt
+
+    def test_grok_does_not_inject_codex_delegation_guidance(self):
+        from agent.prompt_builder import CODEX_DELEGATION_GUIDANCE
+        agent = self._make_agent(model="x-ai/grok-4.3", tool_use_enforcement="auto")
+        prompt = agent._build_system_prompt()
+        assert CODEX_DELEGATION_GUIDANCE not in prompt
+
+    def test_codex_delegation_requires_terminal_tool(self):
+        from agent.prompt_builder import CODEX_DELEGATION_GUIDANCE
+        agent = self._make_agent(
+            model="openai/gpt-5.5",
+            tool_use_enforcement="auto",
+            tool_names=("web_search",),
+        )
+        prompt = agent._build_system_prompt()
+        assert CODEX_DELEGATION_GUIDANCE not in prompt
 
     def test_auto_skips_for_claude(self):
         from agent.prompt_builder import TOOL_USE_ENFORCEMENT_GUIDANCE

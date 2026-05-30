@@ -21,6 +21,7 @@ from agent.prompt_builder import (
     build_environment_hints,
     CONTEXT_FILE_MAX_CHARS,
     DEFAULT_AGENT_IDENTITY,
+    CODEX_DELEGATION_GUIDANCE,
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
@@ -1187,6 +1188,23 @@ class TestOpenAIModelExecutionGuidance:
     def test_guidance_is_string(self):
         assert isinstance(OPENAI_MODEL_EXECUTION_GUIDANCE, str)
         assert len(OPENAI_MODEL_EXECUTION_GUIDANCE) > 100
+
+
+class TestCodexDelegationGuidance:
+    """Tests for OpenAI-family Codex delegation guidance."""
+
+    def test_guidance_mentions_codex_delegate_skill(self):
+        assert "codex-delegate" in CODEX_DELEGATION_GUIDANCE
+
+    def test_guidance_scopes_to_non_trivial_coding(self):
+        text = CODEX_DELEGATION_GUIDANCE.lower()
+        assert "non-trivial software-development" in text
+        assert "simple q&a" in text
+
+    def test_guidance_integrates_superpowers(self):
+        text = CODEX_DELEGATION_GUIDANCE.lower()
+        assert "superpowers" in text
+        assert "method/verification layer" in text
 
 
 # =========================================================================

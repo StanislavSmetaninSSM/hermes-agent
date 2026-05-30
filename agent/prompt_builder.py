@@ -330,6 +330,29 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "</missing_context>"
 )
 
+CODEX_DELEGATION_GUIDANCE = (
+    "# Codex delegation for OpenAI coding work\n"
+    "When the active model/provider is OpenAI-family and the user asks for a "
+    "non-trivial software-development task, prefer delegating the repository "
+    "implementation loop to the local Codex CLI instead of doing all coding "
+    "directly inside Hermes.\n"
+    "\n"
+    "Delegate to Codex for: substantial repository edits, multi-file features, "
+    "hard debugging, risky refactors, migrations, code review, long autonomous "
+    "coding runs, and any task where the user explicitly asks for Codex.\n"
+    "\n"
+    "Do not delegate for simple Q&A, quick inspection, tiny one-file edits, "
+    "or tasks where the target repository/path is unclear. Ask for the repo/path "
+    "when it is required and cannot be inferred safely.\n"
+    "\n"
+    "If the `codex-delegate` skill is available, load and follow it. When "
+    "Superpowers skills are active, use them as the method/verification layer "
+    "and hand the heavy coding loop to Codex. Hermes remains responsible for "
+    "understanding the user's request, preparing a precise Codex prompt, "
+    "monitoring the background run, checking logs/diff/tests, and reporting "
+    "verified results to the user."
+)
+
 # Gemini/Gemma-specific operational guidance, adapted from OpenCode's gemini.txt.
 # Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
 GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (

@@ -28,6 +28,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from agent.prompt_builder import (
+    CODEX_DELEGATION_GUIDANCE,
     DEFAULT_AGENT_IDENTITY,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
@@ -40,6 +41,26 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
 )
+
+
+def _is_openai_family_for_codex_delegation(agent: Any) -> bool:
+    """Return True when Codex CLI delegation should be suggested."""
+    model_lower = (getattr(agent, "model", "") or "").strip().lower()
+    provider_lower = (getattr(agent, "provider", "") or "").strip().lower()
+    base_url_lower = (getattr(agent, "base_url", "") or "").strip().lower()
+
+    if provider_lower in {"openai", "openai-codex"}:
+        return True
+    if "chatgpt.com/backend-api/codex" in base_url_lower:
+        return True
+    if "api.openai.com" in base_url_lower:
+        return True
+    if "openai/" in model_lower or "gpt" in model_lower or "codex" in model_lower:
+        return True
+    return any(
+        marker in model_lower
+        for marker in ("o1", "o3", "o4", "/o1", "/o3", "/o4")
+    )
 
 
 def _ra():
@@ -165,6 +186,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             # existing tools, replies with plans instead of executing).
             if "gpt" in _model_lower or "codex" in _model_lower or "grok" in _model_lower:
                 stable_parts.append(OPENAI_MODEL_EXECUTION_GUIDANCE)
+
+        if (
+            "terminal" in agent.valid_tool_names
+            and _is_openai_family_for_codex_delegation(agent)
+        ):
+            stable_parts.append(CODEX_DELEGATION_GUIDANCE)
 
     has_skills_tools = any(name in agent.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
     if has_skills_tools:
