@@ -8712,12 +8712,12 @@ def cmd_update(args):
 
 
 def cmd_update_custom(args):
-    """Update Stanislav's custom Hermes branch.
+    """Update Stanislav's Hermes fork main.
 
     This is intentionally separate from ``hermes update``.  The stock updater
     targets ``origin/<branch>`` (default ``origin/main``); this installation
-    keeps local fixes on a long-lived branch and updates by merging
-    ``origin/main`` into ``stanislav/hermes-local-fixes``.
+    keeps durable local fixes on the user's fork main and updates by merging
+    official ``origin/main`` into that fork branch.
     """
     script = PROJECT_ROOT / "scripts" / "update-stanislav-hermes.sh"
     if not script.exists():
@@ -13588,10 +13588,10 @@ Examples:
     update_custom_parser = subparsers.add_parser(
         "update-custom",
         aliases=["update-local", "update-stanislav"],
-        help="Update Stanislav's custom Hermes branch",
+        help="Update Stanislav's Hermes fork main",
         description=(
-            "Merge upstream origin/main into stanislav/hermes-local-fixes, "
-            "run the custom regression suite, and push the branch to the fork."
+            "Merge upstream origin/main into fork main, run the custom "
+            "regression suite, and push main to Stanislav's fork."
         ),
     )
     update_custom_parser.add_argument(
@@ -13618,7 +13618,7 @@ Examples:
         "--no-push",
         action="store_true",
         default=False,
-        help="Do not push the custom branch to the fork",
+        help="Do not push the target branch to the fork",
     )
     update_custom_parser.add_argument(
         "--restart-gateway",

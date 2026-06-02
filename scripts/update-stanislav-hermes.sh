@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Update this local Hermes checkout while preserving Stanislav's custom branch.
+# Update this local Hermes checkout while preserving Stanislav's fork main.
 #
 # Strategy:
 #   upstream official Hermes: origin/main
-#   local custom branch:      stanislav/hermes-local-fixes
 #   writable fork remote:     stanislav
+#   target fork branch:       main
 #
 # This intentionally does NOT run `hermes update`, because the stock updater
-# targets origin/<branch> and the default branch is main. For this setup we want
-# to merge upstream main into our long-lived custom branch, test it, then push
-# the custom branch to the user's fork.
+# targets origin/<branch> and the default origin here is the official upstream.
+# For this setup we want to keep durable local fixes on the user's fork main:
+# fast-forward local main to stanislav/main, merge upstream main into it, test,
+# then push main back to the user's fork.
 
 set -euo pipefail
 
@@ -21,7 +22,7 @@ fi
 
 UPSTREAM_REMOTE="${HERMES_UPSTREAM_REMOTE:-origin}"
 UPSTREAM_BRANCH="${HERMES_UPSTREAM_BRANCH:-main}"
-LOCAL_BRANCH="${HERMES_LOCAL_BRANCH:-stanislav/hermes-local-fixes}"
+TARGET_BRANCH="${HERMES_TARGET_BRANCH:-main}"
 FORK_REMOTE="${HERMES_FORK_REMOTE:-stanislav}"
 FORK_URL="${HERMES_FORK_URL:-https://github.com/StanislavSmetaninSSM/hermes-agent.git}"
 OFFICIAL_URL="${HERMES_OFFICIAL_URL:-https://github.com/NousResearch/hermes-agent.git}"
@@ -38,22 +39,22 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/update-stanislav-hermes.sh [options]
 
-Safely updates Stanislav's custom Hermes branch by merging upstream origin/main
-into stanislav/hermes-local-fixes, optionally testing, pushing to the fork, and
-optionally restarting the gateway.
+Safely updates Stanislav's Hermes fork main by merging upstream origin/main into
+main, optionally testing, pushing to the fork, and optionally restarting the
+gateway.
 
 Options:
   --dry-run            Fetch and report pending upstream commits; do not merge.
   --no-tests           Skip targeted pytest suite.
   --install-deps       Reinstall editable Python package after merge.
-  --no-push            Do not push the custom branch to the fork.
+  --no-push            Do not push the target branch to the fork.
   --restart-gateway    Restart Hermes gateway after a successful update.
   -y, --yes            Non-interactive mode for cron/automation.
   -h, --help           Show this help.
 
 Environment overrides:
   HERMES_REPO, HERMES_UPSTREAM_REMOTE, HERMES_UPSTREAM_BRANCH,
-  HERMES_LOCAL_BRANCH, HERMES_FORK_REMOTE, HERMES_FORK_URL, HERMES_OFFICIAL_URL
+  HERMES_TARGET_BRANCH, HERMES_FORK_REMOTE, HERMES_FORK_URL, HERMES_OFFICIAL_URL
 
 Recommended manual update:
   scripts/update-stanislav-hermes.sh --restart-gateway
@@ -119,11 +120,15 @@ run_tests() {
     tests/gateway/test_telegram_text_batching.py \
     tests/gateway/test_active_session_text_merge.py \
     tests/gateway/test_session.py \
+    tests/gateway/test_background_process_notifications.py \
+    tests/gateway/test_internal_event_bypass_pairing.py \
     tests/agent/test_context_compressor.py \
     tests/run_agent/test_message_sequence_repair.py \
     tests/run_agent/test_thinking_only_sanitizer.py \
     tests/run_agent/test_run_agent_codex_responses.py \
     tests/agent/test_codex_ttfb_watchdog.py \
+    tests/tools/test_terminal_tool.py \
+    tests/tools/test_process_registry.py::TestCheckpoint \
     -q --tb=short --timeout-method=thread
 }
 
@@ -145,10 +150,10 @@ restart_gateway() {
 }
 
 create_pre_update_backup() {
-  local stamp safe_local_branch
+  local stamp safe_target_branch
   stamp="$(date +%Y%m%d-%H%M%S)"
-  safe_local_branch="${LOCAL_BRANCH//\//-}"
-  PRE_UPDATE_BACKUP_BRANCH="backup/${safe_local_branch}-pre-update-${stamp}"
+  safe_target_branch="${TARGET_BRANCH//\//-}"
+  PRE_UPDATE_BACKUP_BRANCH="backup/${safe_target_branch}-pre-update-${stamp}"
 
   say "→ Creating pre-update backup branch: $PRE_UPDATE_BACKUP_BRANCH"
   run git branch "$PRE_UPDATE_BACKUP_BRANCH" HEAD
@@ -161,49 +166,71 @@ create_pre_update_backup() {
   fi
 }
 
+switch_to_target_branch() {
+  local fork_ref="$FORK_REMOTE/$TARGET_BRANCH"
+
+  if ! git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+    if git show-ref --verify --quiet "refs/remotes/$fork_ref"; then
+      run git switch -c "$TARGET_BRANCH" --track "$fork_ref"
+    else
+      run git switch -c "$TARGET_BRANCH" "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
+    fi
+  elif [[ "$(git branch --show-current)" != "$TARGET_BRANCH" ]]; then
+    run git switch "$TARGET_BRANCH"
+  fi
+
+  if git show-ref --verify --quiet "refs/remotes/$fork_ref"; then
+    local configured_upstream
+    configured_upstream="$(git rev-parse --abbrev-ref --symbolic-full-name "${TARGET_BRANCH}@{upstream}" 2>/dev/null || true)"
+    if [[ "$configured_upstream" != "$fork_ref" ]]; then
+      run git branch --set-upstream-to="$fork_ref" "$TARGET_BRANCH"
+    fi
+
+    if git merge-base --is-ancestor HEAD "$fork_ref"; then
+      run git merge --ff-only "$fork_ref"
+    elif git merge-base --is-ancestor "$fork_ref" HEAD; then
+      say "→ Local $TARGET_BRANCH is already ahead of $fork_ref; keeping local commits."
+    else
+      fail "Local $TARGET_BRANCH diverged from $fork_ref. Resolve manually before updating."
+    fi
+  fi
+}
+
 require_clean_tree
 ensure_remote "$UPSTREAM_REMOTE" "$OFFICIAL_URL"
 ensure_remote "$FORK_REMOTE" "$FORK_URL"
 
 say "→ Fetching remotes..."
-run git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
-run git fetch "$FORK_REMOTE" "$LOCAL_BRANCH" || true
+run git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH:refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
+run git fetch "$FORK_REMOTE" "$TARGET_BRANCH:refs/remotes/$FORK_REMOTE/$TARGET_BRANCH" || true
 
-if ! git show-ref --verify --quiet "refs/heads/$LOCAL_BRANCH"; then
-  if git show-ref --verify --quiet "refs/remotes/$FORK_REMOTE/$LOCAL_BRANCH"; then
-    run git switch -c "$LOCAL_BRANCH" "$FORK_REMOTE/$LOCAL_BRANCH"
-  else
-    run git switch -c "$LOCAL_BRANCH" "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
-  fi
-elif [[ "$(git branch --show-current)" != "$LOCAL_BRANCH" ]]; then
-  run git switch "$LOCAL_BRANCH"
-fi
+switch_to_target_branch
 
 upstream_ref="$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
 head_sha="$(git rev-parse --short HEAD)"
 upstream_sha="$(git rev-parse --short "$upstream_ref")"
-ahead_count="$(git rev-list --count "HEAD..$upstream_ref")"
-behind_count="$(git rev-list --count "$upstream_ref..HEAD")"
+behind_upstream_count="$(git rev-list --count "HEAD..$upstream_ref")"
+ahead_of_upstream_count="$(git rev-list --count "$upstream_ref..HEAD")"
 
 say "Current branch: $(git branch --show-current) @ $head_sha"
 say "Upstream:       $upstream_ref @ $upstream_sha"
-say "Behind upstream: $ahead_count commit(s)"
-say "Ahead of upstream: $behind_count commit(s)"
+say "Behind upstream: $behind_upstream_count commit(s)"
+say "Ahead of upstream: $ahead_of_upstream_count commit(s)"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  if [[ "$ahead_count" -eq 0 ]]; then
-    say "✓ No upstream update available for $LOCAL_BRANCH."
+  if [[ "$behind_upstream_count" -eq 0 ]]; then
+    say "✓ No upstream update available for $TARGET_BRANCH."
     exit 0
   fi
   say "⚠ Upstream update is available. Run: scripts/update-stanislav-hermes.sh --restart-gateway"
   exit 10
 fi
 
-if [[ "$ahead_count" -eq 0 ]]; then
+if [[ "$behind_upstream_count" -eq 0 ]]; then
   say "✓ Already includes latest $upstream_ref."
 else
   if [[ "$YES" -ne 1 ]]; then
-    say "About to merge $upstream_ref into $LOCAL_BRANCH."
+    say "About to merge $upstream_ref into $TARGET_BRANCH."
     read -r -p "Continue? [Y/n] " response
     response="${response:-y}"
     case "$response" in
@@ -214,7 +241,7 @@ else
 
   create_pre_update_backup
 
-  say "→ Merging upstream main into custom branch..."
+  say "→ Merging upstream main into fork main..."
   if ! git merge --no-edit "$upstream_ref"; then
     say "✗ Merge conflict. Resolve conflicts, run tests, then commit and push."
     if [[ -n "$PRE_UPDATE_BACKUP_BRANCH" ]]; then
@@ -238,8 +265,8 @@ else
 fi
 
 if [[ "$PUSH" -eq 1 ]]; then
-  say "→ Pushing custom branch to fork..."
-  run git push "$FORK_REMOTE" "$LOCAL_BRANCH"
+  say "→ Pushing $TARGET_BRANCH to fork..."
+  run git push "$FORK_REMOTE" "HEAD:refs/heads/$TARGET_BRANCH"
 else
   say "→ Push skipped."
 fi

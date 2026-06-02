@@ -217,7 +217,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("update", "Update Hermes Agent to the latest version", "Info"),
     CommandDef(
         "update_custom",
-        "Update Stanislav's custom Hermes branch",
+        "Update Stanislav's Hermes fork main",
         "Info",
         aliases=("update-custom", "update-stanislav", "update_stanislav", "hupdate"),
         cli_only=True,

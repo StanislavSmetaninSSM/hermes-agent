@@ -1,4 +1,4 @@
-"""Regression tests for the local custom-branch updater script."""
+"""Regression tests for the local fork-main updater script."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "update-stanislav-hermes.sh"
-LOCAL_BRANCH = "stanislav/hermes-local-fixes"
-BACKUP_GLOB = "backup/stanislav-hermes-local-fixes-pre-update-*"
+TARGET_BRANCH = "main"
+BACKUP_GLOB = "backup/main-pre-update-*"
 
 
 def _run(
@@ -89,7 +89,7 @@ def _init_custom_update_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
             str(fork_bare),
             "symbolic-ref",
             "HEAD",
-            f"refs/heads/{LOCAL_BRANCH}",
+            f"refs/heads/{TARGET_BRANCH}",
         ]
     )
 
@@ -97,10 +97,9 @@ def _init_custom_update_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     _git(work, "config", "user.name", "Test User")
     _git(work, "config", "user.email", "test@example.invalid")
     _git(work, "remote", "add", "stanislav", fork_bare.as_uri())
-    _git(work, "switch", "-c", LOCAL_BRANCH)
     _write(work / "app.txt", "custom local change\n")
     _commit(work, "custom local change")
-    _git(work, "push", "-u", "stanislav", LOCAL_BRANCH)
+    _git(work, "push", "-u", "stanislav", TARGET_BRANCH)
 
     _write(upstream_work / "app.txt", "upstream change\n")
     _commit(upstream_work, "upstream conflicting change")
@@ -123,7 +122,7 @@ def test_custom_update_conflict_creates_backup_before_failed_merge(tmp_path: Pat
             "HERMES_REPO": _bash_path(work),
             "HERMES_UPSTREAM_REMOTE": "origin",
             "HERMES_UPSTREAM_BRANCH": "main",
-            "HERMES_LOCAL_BRANCH": LOCAL_BRANCH,
+            "HERMES_TARGET_BRANCH": TARGET_BRANCH,
             "HERMES_FORK_REMOTE": "stanislav",
             "HERMES_FORK_URL": fork_bare.as_uri(),
             "HERMES_OFFICIAL_URL": upstream_bare.as_uri(),

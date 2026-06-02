@@ -14219,8 +14219,8 @@ class GatewayRunner:
 
         self._schedule_update_notification_watch()
         if check_only:
-            return "Checking custom Hermes branch for upstream updates..."
-        return "Starting custom Hermes update: merging `origin/main` into `stanislav/hermes-local-fixes`. Progress will be streamed here."
+            return "Checking Stanislav Hermes fork main for upstream updates..."
+        return "Starting custom Hermes update: merging `origin/main` into fork `main`. Progress will be streamed here."
 
     def _schedule_update_notification_watch(self) -> None:
         """Ensure a background task is watching for update completion."""
