@@ -662,6 +662,7 @@ class TestCheckpoint:
         with patch("tools.process_registry.CHECKPOINT_PATH", tmp_path / "procs.json"):
             s = _make_session()
             s.watcher_platform = "telegram"
+            s.watcher_chat_type = "dm"
             s.watcher_chat_id = "999"
             s.watcher_user_id = "u123"
             s.watcher_user_name = "alice"
@@ -673,6 +674,7 @@ class TestCheckpoint:
             data = json.loads((tmp_path / "procs.json").read_text())
             assert len(data) == 1
             assert data[0]["watcher_platform"] == "telegram"
+            assert data[0]["watcher_chat_type"] == "dm"
             assert data[0]["watcher_chat_id"] == "999"
             assert data[0]["watcher_user_id"] == "u123"
             assert data[0]["watcher_user_name"] == "alice"
@@ -688,6 +690,7 @@ class TestCheckpoint:
             "task_id": "t1",
             "session_key": "sk1",
             "watcher_platform": "telegram",
+            "watcher_chat_type": "dm",
             "watcher_chat_id": "123",
             "watcher_user_id": "u123",
             "watcher_user_name": "alice",
@@ -701,6 +704,7 @@ class TestCheckpoint:
             w = registry.pending_watchers[0]
             assert w["session_id"] == "proc_live"
             assert w["platform"] == "telegram"
+            assert w["chat_type"] == "dm"
             assert w["chat_id"] == "123"
             assert w["user_id"] == "u123"
             assert w["user_name"] == "alice"

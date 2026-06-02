@@ -4366,14 +4366,7 @@ class GatewayRunner:
         self._schedule_resume_pending_sessions()
 
         # Drain any recovered process watchers (from crash recovery checkpoint)
-        try:
-            from tools.process_registry import process_registry
-            while process_registry.pending_watchers:
-                watcher = process_registry.pending_watchers.pop(0)
-                asyncio.create_task(self._run_process_watcher(watcher))
-                logger.info("Resumed watcher for recovered process %s", watcher.get("session_id"))
-        except Exception as e:
-            logger.error("Recovered watcher setup error: %s", e)
+        self._drain_pending_process_watchers()
 
         # Start background session expiry watcher to finalize expired sessions
         asyncio.create_task(self._session_expiry_watcher())
@@ -8884,13 +8877,7 @@ class GatewayRunner:
             })
             
             # Check for pending process watchers (check_interval on background processes)
-            try:
-                from tools.process_registry import process_registry
-                while process_registry.pending_watchers:
-                    watcher = process_registry.pending_watchers.pop(0)
-                    asyncio.create_task(self._run_process_watcher(watcher))
-            except Exception as e:
-                logger.error("Process watcher setup error: %s", e)
+            self._drain_pending_process_watchers()
 
             # Drain watch pattern notifications that arrived during the agent run.
             # Watch events and completions share the same queue; completions are
@@ -14999,6 +14986,36 @@ class GatewayRunner:
         except Exception as e:
             logger.error("Watch notification injection error: %s", e)
 
+    def _drain_pending_process_watchers(self, loop=None) -> int:
+        """Start pending process watchers created outside a foreground turn.
+
+        Gateway user turns drain this queue after the agent loop. Cron jobs run
+        on the gateway's cron ticker thread, so they need an explicit drain that
+        schedules watcher coroutines onto the main gateway event loop.
+        """
+        started = 0
+        try:
+            from tools.process_registry import process_registry
+            while process_registry.pending_watchers:
+                watcher = process_registry.pending_watchers.pop(0)
+                coro = self._run_process_watcher(watcher)
+                if loop is not None:
+                    fut = safe_schedule_threadsafe(
+                        coro,
+                        loop,
+                        logger=logger,
+                        log_message="Process watcher scheduling error",
+                    )
+                    if fut is None:
+                        continue
+                else:
+                    asyncio.create_task(coro)
+                started += 1
+                logger.info("Started process watcher for %s", watcher.get("session_id"))
+        except Exception as e:
+            logger.error("Process watcher setup error: %s", e)
+        return started
+
     async def _run_process_watcher(self, watcher: dict) -> None:
         """
         Periodically check a background process and push updates to the user.
@@ -15081,6 +15098,7 @@ class GatewayRunner:
                         "session_id": session_id,
                         "session_key": session_key,
                         "platform": platform_name,
+                        "chat_type": watcher.get("chat_type", ""),
                         "chat_id": chat_id,
                         "thread_id": thread_id,
                         "user_id": user_id,
@@ -18244,7 +18262,7 @@ class GatewayRunner:
         return response
 
 
-def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, interval: int = 60):
+def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, interval: int = 60, runner=None):
     """
     Background thread that ticks the cron scheduler at a regular interval.
     
@@ -18274,6 +18292,9 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
             cron_tick(verbose=False, adapters=adapters, loop=loop)
         except Exception as e:
             logger.debug("Cron tick error: %s", e)
+
+        if runner is not None:
+            runner._drain_pending_process_watchers(loop=loop)
 
         tick_count += 1
 
@@ -18708,7 +18729,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     cron_thread = threading.Thread(
         target=_start_cron_ticker,
         args=(cron_stop,),
-        kwargs={"adapters": runner.adapters, "loop": asyncio.get_running_loop()},
+        kwargs={"adapters": runner.adapters, "loop": asyncio.get_running_loop(), "runner": runner},
         daemon=True,
         name="cron-ticker",
     )

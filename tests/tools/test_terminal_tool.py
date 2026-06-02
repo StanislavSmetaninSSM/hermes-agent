@@ -168,3 +168,77 @@ def test_validate_workdir_blocks_shell_metacharacters_in_windows_paths():
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project; rm -rf /")
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project$(whoami)")
     assert terminal_tool._validate_workdir("C:\\Users\\Alice\\project\nwhoami")
+
+
+def _set_session_context_vars(values):
+    """Set gateway session ContextVars and return reset tokens."""
+    from gateway import session_context
+
+    tokens = []
+    for name, value in values.items():
+        tokens.append((name, session_context._VAR_MAP[name].set(value)))
+    return tokens
+
+
+def _reset_session_context_vars(tokens):
+    from gateway import session_context
+
+    for name, token in reversed(tokens):
+        session_context._VAR_MAP[name].reset(token)
+
+
+def test_cron_auto_delivery_routing_is_used_for_background_notifications():
+    """Cron clears HERMES_SESSION_* but still exposes delivery routing.
+
+    terminal(background=True, notify_on_complete=True) must register watcher
+    metadata from HERMES_CRON_AUTO_DELIVER_* in that context; otherwise cron
+    jobs can launch a long-running process that finishes silently.
+    """
+    tokens = _set_session_context_vars({
+        "HERMES_SESSION_PLATFORM": "",
+        "HERMES_SESSION_CHAT_ID": "",
+        "HERMES_SESSION_THREAD_ID": "",
+        "HERMES_SESSION_USER_ID": "",
+        "HERMES_SESSION_USER_NAME": "",
+        "HERMES_SESSION_MESSAGE_ID": "",
+        "HERMES_CRON_AUTO_DELIVER_PLATFORM": "telegram",
+        "HERMES_CRON_AUTO_DELIVER_CHAT_ID": "5046179780",
+        "HERMES_CRON_AUTO_DELIVER_THREAD_ID": "13238",
+    })
+    try:
+        metadata = terminal_tool._resolve_process_watcher_metadata()
+    finally:
+        _reset_session_context_vars(tokens)
+
+    assert metadata["platform"] == "telegram"
+    assert metadata["chat_id"] == "5046179780"
+    assert metadata["thread_id"] == "13238"
+    assert metadata["chat_type"] == "dm"
+    assert metadata["source"] == "cron"
+
+
+def test_live_session_routing_wins_over_cron_auto_delivery_routing():
+    """A foreground gateway turn must not be hijacked by stale cron routing."""
+    tokens = _set_session_context_vars({
+        "HERMES_SESSION_PLATFORM": "telegram",
+        "HERMES_SESSION_CHAT_ID": "111",
+        "HERMES_SESSION_THREAD_ID": "222",
+        "HERMES_SESSION_USER_ID": "333",
+        "HERMES_SESSION_USER_NAME": "Alice",
+        "HERMES_SESSION_MESSAGE_ID": "444",
+        "HERMES_CRON_AUTO_DELIVER_PLATFORM": "telegram",
+        "HERMES_CRON_AUTO_DELIVER_CHAT_ID": "999",
+        "HERMES_CRON_AUTO_DELIVER_THREAD_ID": "888",
+    })
+    try:
+        metadata = terminal_tool._resolve_process_watcher_metadata()
+    finally:
+        _reset_session_context_vars(tokens)
+
+    assert metadata["platform"] == "telegram"
+    assert metadata["chat_id"] == "111"
+    assert metadata["thread_id"] == "222"
+    assert metadata["user_id"] == "333"
+    assert metadata["user_name"] == "Alice"
+    assert metadata["message_id"] == "444"
+    assert metadata["source"] == "session"

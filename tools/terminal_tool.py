@@ -1573,6 +1573,66 @@ def _resolve_notification_flag_conflict(
     return watch_patterns, ""
 
 
+def _infer_process_watcher_chat_type(platform: str, chat_id: str, thread_id: str = "") -> str:
+    """Best-effort chat_type for process notifications without a session_key.
+
+    Normal gateway turns have a session_key whose parsed chat_type wins later.
+    Cron auto-delivery only exposes platform/chat/thread routing metadata, so
+    notify_on_complete needs enough source information to inject a synthetic
+    gateway event when the process exits.
+    """
+    platform_name = (platform or "").strip().lower()
+    chat_id_text = str(chat_id or "").strip()
+    if platform_name == "telegram":
+        return "group" if chat_id_text.startswith("-") else "dm"
+    if platform_name == "discord" and thread_id:
+        return "thread"
+    return "dm"
+
+
+def _resolve_process_watcher_metadata() -> dict:
+    """Resolve routing metadata for background process notifications.
+
+    Foreground gateway sessions use HERMES_SESSION_* ContextVars. Cron jobs
+    intentionally clear those vars, but set HERMES_CRON_AUTO_DELIVER_* for
+    result delivery. Use that cron routing as a fallback so
+    terminal(background=True, notify_on_complete=True) still has a destination.
+    """
+    from gateway.session_context import get_session_env
+
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "") or ""
+    chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "") or ""
+    thread_id = get_session_env("HERMES_SESSION_THREAD_ID", "") or ""
+    user_id = get_session_env("HERMES_SESSION_USER_ID", "") or ""
+    user_name = get_session_env("HERMES_SESSION_USER_NAME", "") or ""
+    message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "") or ""
+    source = "session"
+
+    if not (platform and chat_id):
+        cron_platform = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "") or ""
+        cron_chat_id = get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID", "") or ""
+        if cron_platform and cron_chat_id:
+            platform = cron_platform
+            chat_id = cron_chat_id
+            thread_id = get_session_env("HERMES_CRON_AUTO_DELIVER_THREAD_ID", "") or ""
+            user_id = ""
+            user_name = ""
+            message_id = ""
+            source = "cron"
+
+    chat_type = _infer_process_watcher_chat_type(platform, chat_id, thread_id) if platform and chat_id else ""
+    return {
+        "platform": platform,
+        "chat_type": chat_type,
+        "chat_id": chat_id,
+        "thread_id": thread_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "message_id": message_id,
+        "source": source if platform and chat_id else "",
+    }
+
+
 def terminal_tool(
     command: str,
     background: bool = False,
@@ -1981,23 +2041,20 @@ def terminal_tool(
                         )
 
                 # Populate routing metadata on the session so that
-                # watch-pattern and completion notifications can be
-                # routed back to the correct chat/thread.
+                # watch-pattern and completion notifications can be routed
+                # back to the correct chat/thread. Gateway user turns provide
+                # HERMES_SESSION_*; cron jobs clear those vars but set
+                # HERMES_CRON_AUTO_DELIVER_* for their delivery target.
                 if background and (notify_on_complete or watch_patterns):
-                    from gateway.session_context import get_session_env as _gse
-                    _gw_platform = _gse("HERMES_SESSION_PLATFORM", "")
-                    if _gw_platform:
-                        _gw_chat_id = _gse("HERMES_SESSION_CHAT_ID", "")
-                        _gw_thread_id = _gse("HERMES_SESSION_THREAD_ID", "")
-                        _gw_user_id = _gse("HERMES_SESSION_USER_ID", "")
-                        _gw_user_name = _gse("HERMES_SESSION_USER_NAME", "")
-                        _gw_message_id = _gse("HERMES_SESSION_MESSAGE_ID", "")
-                        proc_session.watcher_platform = _gw_platform
-                        proc_session.watcher_chat_id = _gw_chat_id
-                        proc_session.watcher_user_id = _gw_user_id
-                        proc_session.watcher_user_name = _gw_user_name
-                        proc_session.watcher_thread_id = _gw_thread_id
-                        proc_session.watcher_message_id = _gw_message_id
+                    _watcher_meta = _resolve_process_watcher_metadata()
+                    if _watcher_meta.get("platform") and _watcher_meta.get("chat_id"):
+                        proc_session.watcher_platform = _watcher_meta["platform"]
+                        proc_session.watcher_chat_type = _watcher_meta.get("chat_type", "")
+                        proc_session.watcher_chat_id = _watcher_meta["chat_id"]
+                        proc_session.watcher_user_id = _watcher_meta.get("user_id", "")
+                        proc_session.watcher_user_name = _watcher_meta.get("user_name", "")
+                        proc_session.watcher_thread_id = _watcher_meta.get("thread_id", "")
+                        proc_session.watcher_message_id = _watcher_meta.get("message_id", "")
 
                 # Mutual exclusion: if both notify_on_complete and watch_patterns
                 # are set, drop watch_patterns. The combination produces duplicate
@@ -2030,6 +2087,7 @@ def terminal_tool(
                             "check_interval": 5,
                             "session_key": session_key,
                             "platform": proc_session.watcher_platform,
+                            "chat_type": proc_session.watcher_chat_type,
                             "chat_id": proc_session.watcher_chat_id,
                             "user_id": proc_session.watcher_user_id,
                             "user_name": proc_session.watcher_user_name,

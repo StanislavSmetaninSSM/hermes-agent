@@ -358,6 +358,48 @@ async def test_agent_notification_no_message_id_is_tolerated(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_agent_notification_routes_cron_metadata_without_session_key(monkeypatch, tmp_path):
+    """Cron-created watchers do not have a gateway session_key.
+
+    Direct platform/chat/chat_type metadata must be enough to inject the
+    completion event; otherwise notify_on_complete from cron silently drops.
+    """
+    import tools.process_registry as pr_module
+
+    sessions = [SimpleNamespace(
+        output_buffer="cron done\n", exited=True, exit_code=0, command="run-codex",
+    )]
+    monkeypatch.setattr(pr_module, "process_registry", _FakeRegistry(sessions))
+
+    async def _instant_sleep(*_a, **_kw):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    adapter = runner.adapters[Platform.TELEGRAM]
+
+    watcher = {
+        "session_id": "proc_cron",
+        "check_interval": 0,
+        "platform": "telegram",
+        "chat_type": "dm",
+        "chat_id": "5046179780",
+        "thread_id": "13238",
+        "notify_on_complete": True,
+    }
+    await runner._run_process_watcher(watcher)
+
+    adapter.handle_message.assert_awaited_once()
+    synth_event = adapter.handle_message.await_args.args[0]
+    assert synth_event.internal is True
+    assert synth_event.source.platform == Platform.TELEGRAM
+    assert synth_event.source.chat_id == "5046179780"
+    assert synth_event.source.chat_type == "dm"
+    assert synth_event.source.thread_id == "13238"
+    assert "run-codex" in synth_event.text
+
+
+@pytest.mark.asyncio
 async def test_inject_watch_notification_carries_message_id_reply_anchor(monkeypatch, tmp_path):
     from gateway.session import SessionSource
 
@@ -513,6 +555,49 @@ def test_build_process_event_source_returns_none_for_short_session_key(monkeypat
     }
     source = runner._build_process_event_source(evt)
     assert source is None
+
+
+def test_gateway_runner_drains_pending_watchers_from_cron_thread(monkeypatch, tmp_path):
+    """Cron agent-runs can create background watchers outside user turns.
+
+    The gateway must schedule those pending watchers from the cron ticker thread;
+    otherwise notify_on_complete processes started by cron finish silently until
+    a later foreground user message happens to drain the queue.
+    """
+    import gateway.run as gateway_run
+    import tools.process_registry as pr_module
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    pr_module.process_registry.pending_watchers[:] = [{
+        "session_id": "proc_from_cron",
+        "check_interval": 5,
+        "platform": "telegram",
+        "chat_type": "dm",
+        "chat_id": "123",
+        "thread_id": "456",
+        "notify_on_complete": True,
+    }]
+
+    scheduled = []
+
+    class FakeFuture:
+        def result(self, timeout=None):
+            return None
+
+    def fake_safe_schedule(coro, loop, **_kwargs):
+        scheduled.append((coro, loop))
+        coro.close()
+        return FakeFuture()
+
+    fake_loop = object()
+    monkeypatch.setattr(gateway_run, "safe_schedule_threadsafe", fake_safe_schedule)
+
+    count = runner._drain_pending_process_watchers(loop=fake_loop)
+
+    assert count == 1
+    assert not pr_module.process_registry.pending_watchers
+    assert len(scheduled) == 1
+    assert scheduled[0][1] is fake_loop
 
 
 # ---------------------------------------------------------------------------
