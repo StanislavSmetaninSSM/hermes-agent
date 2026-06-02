@@ -14,7 +14,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from gateway.config import GatewayConfig, Platform
+from gateway.platforms.base import MessageEvent, MessageType
 from gateway.run import GatewayRunner, _parse_session_key
+from gateway.session import SessionSource
 
 
 # ---------------------------------------------------------------------------
@@ -400,8 +402,80 @@ async def test_agent_notification_routes_cron_metadata_without_session_key(monke
 
 
 @pytest.mark.asyncio
+async def test_internal_process_notification_bypasses_busy_session_user_allowlist(monkeypatch, tmp_path):
+    """Synthetic process-completion events have no human user id.
+
+    They are created by the gateway itself after a watched background process
+    exits. The active-session busy guard must still reject unauthorized human
+    follow-ups, but it must not drop trusted internal events as ``user=None``
+    before the notification can start the next agent turn.
+    """
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    runner._is_user_authorized = lambda _source: False
+    runner._busy_text_mode = "queue"
+    runner._running_agents = {}
+    runner._draining = False
+
+    source = SessionSource(
+        platform=Platform.TELEGRAM,
+        chat_id="5046179780",
+        chat_type="dm",
+        thread_id="13238",
+        user_id=None,
+        user_name=None,
+    )
+    event = MessageEvent(
+        text="[SYSTEM: Background process proc_test completed]",
+        message_type=MessageType.TEXT,
+        source=source,
+        internal=True,
+    )
+
+    handled = await runner._handle_active_session_busy_message(
+        event,
+        "agent:main:telegram:dm:5046179780:13238",
+    )
+
+    assert handled is False
+
+
+@pytest.mark.asyncio
+async def test_external_busy_message_still_requires_user_allowlist(monkeypatch, tmp_path):
+    """The internal-event bypass must not reopen active sessions to strangers."""
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    runner._is_user_authorized = lambda _source: False
+    runner._busy_text_mode = "queue"
+    runner._running_agents = {}
+    runner._draining = False
+
+    source = SessionSource(
+        platform=Platform.TELEGRAM,
+        chat_id="5046179780",
+        chat_type="dm",
+        thread_id="13238",
+        user_id="intruder",
+        user_name="Mallory",
+    )
+    event = MessageEvent(
+        text="please steer this active session",
+        message_type=MessageType.TEXT,
+        source=source,
+        internal=False,
+    )
+
+    handled = await runner._handle_active_session_busy_message(
+        event,
+        "agent:main:telegram:dm:5046179780:13238",
+    )
+
+    assert handled is True
+
+
+@pytest.mark.asyncio
 async def test_inject_watch_notification_carries_message_id_reply_anchor(monkeypatch, tmp_path):
-    from gateway.session import SessionSource
+
 
     runner = _build_runner(monkeypatch, tmp_path, "all")
     adapter = runner.adapters[Platform.TELEGRAM]

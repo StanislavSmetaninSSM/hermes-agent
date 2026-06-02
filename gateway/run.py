@@ -3093,7 +3093,7 @@ class GatewayRunner:
         # creating a session.  The busy path must enforce the same check;
         # otherwise unauthorized users in shared threads (Slack/Telegram/Discord)
         # can inject messages into an active session they don't own.
-        if not self._is_user_authorized(event.source):
+        if not getattr(event, "internal", False) and not self._is_user_authorized(event.source):
             logger.warning(
                 "Dropping message from unauthorized user in active session: "
                 "user=%s (%s), platform=%s, session=%s",
