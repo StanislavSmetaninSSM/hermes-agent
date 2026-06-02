@@ -170,12 +170,14 @@ def _looks_like_gateway_process(pid: int) -> bool:
     if not cmdline:
         return False
 
+    cmdline = cmdline.replace("\\", "/")
     patterns = (
         "hermes_cli.main gateway",
         "hermes_cli/main.py gateway",
         "hermes gateway",
         "hermes-gateway",
         "gateway/run.py",
+        "--accept-hooks gateway run",
     )
     return any(pattern in cmdline for pattern in patterns)
 
@@ -196,6 +198,7 @@ def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
         "hermes_cli/main.py gateway",
         "hermes gateway",
         "gateway/run.py",
+        "--accept-hooks gateway run",
     )
     return any(pattern in cmdline for pattern in patterns)
 

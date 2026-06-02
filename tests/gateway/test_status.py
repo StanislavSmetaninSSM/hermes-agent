@@ -244,6 +244,27 @@ class TestGatewayPidState:
         finally:
             status.release_gateway_runtime_lock()
 
+    def test_get_running_pid_accepts_accept_hooks_gateway_run_lock_record(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 123)
+        monkeypatch.setattr(status, "_read_process_cmdline", lambda pid: None)
+        monkeypatch.setattr(
+            status,
+            "_build_pid_record",
+            lambda: {
+                "pid": os.getpid(),
+                "kind": "hermes-gateway",
+                "argv": ["/repo/venv/Scripts/hermes", "--accept-hooks", "gateway", "run"],
+                "start_time": 123,
+            },
+        )
+
+        assert status.acquire_gateway_runtime_lock() is True
+        try:
+            assert status.get_running_pid() == os.getpid()
+        finally:
+            status.release_gateway_runtime_lock()
+
 
 class TestGatewayRuntimeStatus:
     def test_write_json_file_uses_atomic_json_write(self, tmp_path, monkeypatch):
