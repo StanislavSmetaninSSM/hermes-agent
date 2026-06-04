@@ -1282,6 +1282,12 @@ class TestCodexDelegationGuidance:
         assert "superpowers" in text
         assert "method/verification layer" in text
 
+    def test_guidance_integrates_spec_kit_bridge(self):
+        text = CODEX_DELEGATION_GUIDANCE.lower()
+        assert "spec-kit-superpowers-bridge" in text
+        assert ".specify" in text
+        assert "before `codex-delegate`" in text
+
 
 # =========================================================================
 # Budget warning history stripping
