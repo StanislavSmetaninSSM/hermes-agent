@@ -3278,7 +3278,12 @@ class GatewayRunner:
         adapter = self.adapters.get(event.source.platform)
         if not adapter:
             return
-        merge_pending_message_event(adapter._pending_messages, session_key, event)
+        merge_pending_message_event(
+            adapter._pending_messages,
+            session_key,
+            event,
+            merge_text=event.message_type == MessageType.TEXT,
+        )
 
     async def _handle_active_session_busy_message(self, event: MessageEvent, session_key: str) -> bool:
         # --- Authorization gate (#17775) ---
@@ -3330,6 +3335,13 @@ class GatewayRunner:
         if not adapter:
             return False  # let default path handle it
 
+        # Synthetic gateway events (for example background process-completion
+        # notifications) are trusted internal work items, not human follow-ups.
+        # Let the normal message path start a turn for them instead of merging
+        # them into the busy human text queue.
+        if getattr(event, "internal", False):
+            return False
+
         running_agent = self._running_agents.get(session_key)
 
         effective_mode = self._busy_input_mode
@@ -3339,7 +3351,13 @@ class GatewayRunner:
             and busy_text_mode == "queue"
             and effective_mode != "steer"
         ):
-            return False
+            merge_pending_message_event(
+                adapter._pending_messages,
+                session_key,
+                event,
+                merge_text=True,
+            )
+            return True
 
         # Steer mode: inject mid-run via running_agent.steer() instead of
         # queueing + interrupting.  If the agent isn't running yet

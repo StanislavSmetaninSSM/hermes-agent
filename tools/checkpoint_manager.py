@@ -1608,12 +1608,21 @@ def clear_all(checkpoint_base: Optional[Path] = None) -> Dict[str, int]:
         return out
     size = _dir_size_bytes(base)
     try:
-        shutil.rmtree(base)
+        shutil.rmtree(base, onerror=_rmtree_chmod_retry)
         out["bytes_freed"] = size
         out["deleted"] = True
     except OSError as exc:
         logger.warning("Could not clear checkpoint base %s: %s", base, exc)
     return out
+
+
+def _rmtree_chmod_retry(func, path, exc_info):
+    """Retry deletion after clearing Windows read-only bits."""
+    try:
+        os.chmod(path, 0o700)
+        func(path)
+    except OSError:
+        raise exc_info[1]
 
 
 def clear_legacy(checkpoint_base: Optional[Path] = None) -> Dict[str, int]:

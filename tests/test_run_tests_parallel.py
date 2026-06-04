@@ -26,6 +26,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,17 @@ import pytest
 # so concurrent invocations of the suite don't clobber each other.
 _HANDOFF_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "hermes-isolation-probe"
 _HANDOFF_DIR.mkdir(exist_ok=True)
+
+
+def _load_runner_module():
+    repo_root = Path(__file__).resolve().parent.parent
+    runner = repo_root / "scripts" / "run_tests_parallel.py"
+    spec = importlib.util.spec_from_file_location("hermes_run_tests_parallel", runner)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _handoff_path_for(nonce: str) -> Path:
@@ -61,6 +73,54 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def test_runner_sets_utf8_mode_for_pytest_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Child pytest interpreters must start in UTF-8 mode on Windows."""
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+
+    env = _load_runner_module()._pytest_env()
+
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_runner_decodes_utf8_pytest_output_independent_of_windows_locale(tmp_path: Path) -> None:
+    """Per-file runner must not crash when pytest emits UTF-8 bytes.
+
+    On Windows cp1251 consoles, ``text=True`` without an explicit encoding
+    decodes child output as cp1251 and can crash the runner before the final
+    summary. The runner should treat pytest output as UTF-8 and keep going.
+    """
+    runner = _load_runner_module()
+    probe = tmp_path / "test_utf8_output.py"
+    probe.write_text(
+        textwrap.dedent(
+            """
+            import sys
+
+            def test_utf8_output():
+                sys.stdout.buffer.write("checkmark: ✓ emoji: 😀\\n".encode("utf-8"))
+                sys.stdout.buffer.flush()
+                assert True
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    file, rc, output, summary, _wall = runner._run_one_file(
+        probe,
+        ["-q", "-s", "-p", "no:timeout", "-o", "addopts="],
+        tmp_path,
+        30,
+    )
+
+    assert file == probe
+    assert rc == 0, output
+    assert "checkmark: ✓ emoji: 😀" in output
+    assert summary.get("passed") == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only probe")

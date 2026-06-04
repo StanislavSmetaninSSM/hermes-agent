@@ -38,10 +38,15 @@ def _home_relative_cwd(cwd: str) -> str:
         return ""
     try:
         home = os.path.expanduser("~")
-        p = os.path.abspath(cwd)
+        raw_cwd = str(cwd)
+        if os.name == "nt" and raw_cwd.startswith("/") and not raw_cwd.startswith("//"):
+            p = raw_cwd
+        else:
+            p = os.path.abspath(raw_cwd)
         if home and (p == home or p.startswith(home + os.sep)):
-            return "~" + p[len(home):]
-        return p
+            suffix = p[len(home):].lstrip("\\/")
+            return "~" if not suffix else "~/" + suffix.replace("\\", "/")
+        return p.replace("\\", "/")
     except Exception:
         return cwd
 

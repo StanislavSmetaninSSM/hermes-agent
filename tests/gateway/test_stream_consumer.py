@@ -516,7 +516,7 @@ class TestSegmentBreakOnToolBoundary:
             SimpleNamespace(success=True, message_id="msg_2"),
         ]
         adapter.send = AsyncMock(side_effect=send_results)
-        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=False, error="flood_control:6"))
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=False, error="transport_error"))
         adapter.MAX_MESSAGE_LENGTH = 4096
 
         config = StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5, cursor=" ▉")
@@ -524,9 +524,17 @@ class TestSegmentBreakOnToolBoundary:
 
         consumer.on_delta("Hello")
         task = asyncio.create_task(consumer.run())
-        await asyncio.sleep(0.08)
+        for _ in range(50):
+            if adapter.send.call_count:
+                break
+            await asyncio.sleep(0.01)
+        assert adapter.send.call_count == 1
         consumer.on_delta(" world")
-        await asyncio.sleep(0.08)
+        for _ in range(50):
+            if adapter.edit_message.call_count:
+                break
+            await asyncio.sleep(0.01)
+        assert adapter.edit_message.call_count >= 1
         consumer.finish()
         await task
 

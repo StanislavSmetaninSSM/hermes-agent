@@ -1,7 +1,9 @@
 """Tests for banner toolset name normalization and skin color usage."""
 
+import sys
 from unittest.mock import patch
 
+import pytest
 from rich.console import Console
 
 import hermes_cli.banner as banner
@@ -70,6 +72,10 @@ def test_build_welcome_banner_uses_normalized_toolset_names():
     assert "web_tools:" not in output
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="OSC-8 hyperlink emission is terminal/platform dependent on Windows",
+)
 def test_build_welcome_banner_title_is_hyperlinked_to_release():
     """Panel title (version label) is wrapped in an OSC-8 hyperlink to the GitHub release."""
     import io

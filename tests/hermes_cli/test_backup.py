@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import sys
 import zipfile
 from argparse import Namespace
 from pathlib import Path
@@ -980,11 +981,12 @@ class TestProfileRestoration:
         assert (hermes_home / "profiles" / "researcher" / "config.yaml").exists()
 
         # Wrapper scripts should be created
-        assert (wrapper_dir / "coder").exists()
-        assert (wrapper_dir / "researcher").exists()
+        suffix = ".bat" if sys.platform == "win32" else ""
+        assert (wrapper_dir / f"coder{suffix}").exists()
+        assert (wrapper_dir / f"researcher{suffix}").exists()
 
         # Wrappers should contain the right content
-        coder_wrapper = (wrapper_dir / "coder").read_text()
+        coder_wrapper = (wrapper_dir / f"coder{suffix}").read_text()
         assert "hermes -p coder" in coder_wrapper
 
     def test_import_skips_profile_dirs_without_config(self, tmp_path, monkeypatch):
@@ -1010,8 +1012,9 @@ class TestProfileRestoration:
         run_import(args)
 
         # Only valid profile should get a wrapper
-        assert (wrapper_dir / "valid").exists()
-        assert not (wrapper_dir / "empty").exists()
+        suffix = ".bat" if sys.platform == "win32" else ""
+        assert (wrapper_dir / f"valid{suffix}").exists()
+        assert not (wrapper_dir / f"empty{suffix}").exists()
 
     def test_import_without_profiles_module(self, tmp_path, monkeypatch):
         """Import gracefully handles missing profiles module (fresh install)."""

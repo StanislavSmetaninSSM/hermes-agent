@@ -48,6 +48,12 @@ def _get_registered() -> Dict[str, str]:
 _config_files: List[Dict[str, str]] | None = None
 
 
+def _container_path(container_base: str, rel_path: object) -> str:
+    """Join a container base with a relative path using POSIX separators."""
+    rel = str(rel_path).replace("\\", "/").lstrip("/")
+    return f"{container_base.rstrip('/')}/{rel}"
+
+
 def _resolve_hermes_home() -> Path:
     from hermes_constants import get_hermes_home
     return get_hermes_home()
@@ -97,7 +103,7 @@ def register_credential_file(
         logger.debug("credential_files: skipping %s (not found)", resolved)
         return False
 
-    container_path = f"{container_base.rstrip('/')}/{relative_path}"
+    container_path = _container_path(container_base, relative_path)
     _get_registered()[container_path] = str(resolved)
     logger.debug("credential_files: registered %s -> %s", resolved, container_path)
     return True
@@ -161,7 +167,7 @@ def _load_config_files() -> List[Dict[str, str]]:
                         continue
                     resolved_path = host_path.resolve()
                     if resolved_path.is_file():
-                        container_path = f"/root/.hermes/{rel}"
+                        container_path = _container_path("/root/.hermes", rel)
                         result.append({
                             "host_path": str(resolved_path),
                             "container_path": container_path,
@@ -309,10 +315,10 @@ def iter_skills_files(
         for item in skills_dir.rglob("*"):
             if item.is_symlink() or not item.is_file():
                 continue
-            rel = item.relative_to(skills_dir)
+            rel = item.relative_to(skills_dir).as_posix()
             result.append({
                 "host_path": str(item),
-                "container_path": f"{container_root}/{rel}",
+                "container_path": _container_path(container_root, rel),
             })
 
     # Include external skill dirs
@@ -325,10 +331,10 @@ def iter_skills_files(
             for item in ext_dir.rglob("*"):
                 if item.is_symlink() or not item.is_file():
                     continue
-                rel = item.relative_to(ext_dir)
+                rel = item.relative_to(ext_dir).as_posix()
                 result.append({
                     "host_path": str(item),
-                    "container_path": f"{container_root}/{rel}",
+                    "container_path": _container_path(container_root, rel),
                 })
     except ImportError:
         pass
@@ -366,7 +372,7 @@ def get_cache_directory_mounts(
         host_dir = get_hermes_dir(new_subpath, old_name)
         if host_dir.is_dir():
             # Always map to the *new* container layout regardless of host layout.
-            container_path = f"{container_base.rstrip('/')}/{new_subpath}"
+            container_path = _container_path(container_base, new_subpath)
             mounts.append({
                 "host_path": str(host_dir),
                 "container_path": container_path,
@@ -396,7 +402,7 @@ def to_agent_visible_cache_path(
         host_dir = Path(mount["host_path"])
         try:
             rel = path.relative_to(host_dir)
-            return str(Path(mount["container_path"]) / rel)
+            return _container_path(mount["container_path"], rel.as_posix())
         except ValueError:
             continue
     return host_path
@@ -421,10 +427,10 @@ def iter_cache_files(
         for item in host_dir.rglob("*"):
             if item.is_symlink() or not item.is_file():
                 continue
-            rel = item.relative_to(host_dir)
+            rel = item.relative_to(host_dir).as_posix()
             result.append({
                 "host_path": str(item),
-                "container_path": f"{container_root}/{rel}",
+                "container_path": _container_path(container_root, rel),
             })
     return result
 

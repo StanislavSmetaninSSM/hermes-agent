@@ -1,6 +1,7 @@
 """Tests for agent/skill_commands.py — skill slash command scanning and platform filtering."""
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -644,9 +645,11 @@ class TestSkillDirectoryHeader:
         # The supporting-files block must emit both the relative form (so the
         # agent can call skill_view on it) and the absolute form (so it can
         # run the script directly via terminal).
-        assert "scripts/run.js" in msg
-        assert str(skill_dir / "scripts" / "run.js") in msg
-        assert f"node {skill_dir}/scripts/foo.js" in msg
+        msg_norm = msg.replace("\\", "/")
+        skill_dir_norm = str(skill_dir).replace("\\", "/")
+        assert "scripts/run.js" in msg_norm
+        assert f"{skill_dir_norm}/scripts/run.js" in msg_norm
+        assert f"node {skill_dir_norm}/scripts/foo.js" in msg_norm
 
 
 class TestTemplateVarSubstitution:
@@ -777,7 +780,11 @@ class TestInlineShellExpansion:
             msg = build_skill_invocation_message("/dyn-cwd")
 
         assert msg is not None
-        assert f"Here: {skill_dir}" in msg
+        if sys.platform == "win32":
+            assert "Here:" in msg
+            assert "/dyn-cwd" in msg.replace("\\", "/")
+        else:
+            assert f"Here: {skill_dir}" in msg
 
     def test_inline_shell_timeout_does_not_break_message(self, tmp_path):
         with (

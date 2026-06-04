@@ -384,13 +384,28 @@ class ResponseStore:
                 response_id TEXT NOT NULL
             )"""
         )
+        self._conn.execute(
+            "UPDATE responses SET accessed_at = accessed_at / 1000000000.0 WHERE accessed_at > 1000000000000"
+        )
         self._conn.commit()
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(accessed_at), 0) FROM responses"
+        ).fetchone()
+        self._last_accessed_at = float(row[0] or 0)
         # response_store.db contains conversation history (tool payloads,
         # prompts, results). Tighten to owner-only after creation so other
         # local users on a shared box can't read it. Run once at __init__
         # rather than after every commit — chmod-on-every-write is wasted
         # syscalls on a hot path.
         self._tighten_file_permissions()
+
+    def _access_time(self) -> float:
+        """Return a strictly increasing timestamp for deterministic LRU order."""
+        now = time.time()
+        if now <= self._last_accessed_at:
+            now = self._last_accessed_at + 0.000001
+        self._last_accessed_at = now
+        return now
 
     def _tighten_file_permissions(self) -> None:
         """Force owner-only permissions on the DB and SQLite sidecars."""
@@ -420,7 +435,7 @@ class ResponseStore:
             return None
         self._conn.execute(
             "UPDATE responses SET accessed_at = ? WHERE response_id = ?",
-            (time.time(), response_id),
+            (self._access_time(), response_id),
         )
         self._conn.commit()
         return json.loads(row[0])
@@ -429,7 +444,7 @@ class ResponseStore:
         """Store a response, evicting the oldest if at capacity."""
         self._conn.execute(
             "INSERT OR REPLACE INTO responses (response_id, data, accessed_at) VALUES (?, ?, ?)",
-            (response_id, json.dumps(data, default=str), time.time()),
+            (response_id, json.dumps(data, default=str), self._access_time()),
         )
         # Evict oldest entries beyond max_size
         count = self._conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
@@ -438,7 +453,7 @@ class ResponseStore:
             evict_ids = [
                 row[0]
                 for row in self._conn.execute(
-                    "SELECT response_id FROM responses ORDER BY accessed_at ASC LIMIT ?",
+                    "SELECT response_id FROM responses ORDER BY accessed_at ASC, rowid ASC LIMIT ?",
                     (count - self._max_size,),
                 ).fetchall()
             ]

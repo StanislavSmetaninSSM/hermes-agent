@@ -15,6 +15,7 @@ Covers the pieces added when boards became a first-class concept:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -280,7 +281,7 @@ class TestBoardCRUD:
         # downstream readers hit `no such table: task_events`.
         kb.create_board("recycle")
         # First connect populates _INITIALIZED_PATHS for this DB.
-        with kb.connect(board="recycle") as conn:
+        with contextlib.closing(kb.connect(board="recycle")) as conn:
             kb.create_task(conn, title="t1", assignee="dev")
         db_path = kb.board_dir("recycle") / "kanban.db"
         assert str(db_path.resolve()) in kb._INITIALIZED_PATHS

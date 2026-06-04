@@ -15,6 +15,7 @@ Inspired by Block/goose's SubdirectoryHintTracker.
 
 import logging
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Dict, Any, Optional, Set
@@ -44,6 +45,8 @@ _COMMAND_TOOLS = {"terminal"}
 # How many parent directories to walk up when looking for hints.
 # Prevents scanning all the way to / for deeply nested paths.
 _MAX_ANCESTOR_WALK = 5
+
+_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+")
 
 
 def _is_ancestor_or_same(a: Path, b: Path) -> bool:
@@ -149,8 +152,11 @@ class SubdirectoryHintTracker:
 
     def _extract_paths_from_command(self, cmd: str, candidates: Set[Path]):
         """Extract path-like tokens from a shell command string."""
+        for match in _WINDOWS_PATH_RE.finditer(cmd):
+            self._add_path_candidate(match.group(0), candidates)
+
         try:
-            tokens = shlex.split(cmd)
+            tokens = shlex.split(cmd, posix=os.name != "nt")
         except ValueError:
             tokens = cmd.split()
 

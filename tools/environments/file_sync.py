@@ -21,7 +21,7 @@ try:
     import fcntl
 except ImportError:
     fcntl = None  # Windows — file locking skipped
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from hermes_constants import get_hermes_home
@@ -87,7 +87,7 @@ def quoted_mkdir_command(dirs: list[str]) -> str:
 
 def unique_parent_dirs(files: list[tuple[str, str]]) -> list[str]:
     """Extract sorted unique parent directories from (host, remote) pairs."""
-    return sorted({str(Path(remote).parent) for _, remote in files})
+    return sorted({PurePosixPath(remote).parent.as_posix() for _, remote in files})
 
 
 def _sha256_file(path: str) -> str:

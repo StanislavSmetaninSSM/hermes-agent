@@ -9286,7 +9286,7 @@ def _cmd_update_pip(args):
     uv = shutil.which("uv")
     in_venv = sys.prefix != sys.base_prefix
     # pipx-managed installs live under .../pipx/venvs/<name>/...
-    pipx_managed = "pipx" in sys.prefix.split(os.sep)
+    pipx_managed = "pipx" in sys.prefix.replace("\\", "/").split("/")
     pipx = shutil.which("pipx") if pipx_managed else None
 
     # Only the ``uv pip install`` path inside a venv needs VIRTUAL_ENV
@@ -11512,6 +11512,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "prompt-size",
         "send", "sessions", "setup",
         "skills", "slack", "status", "tools", "uninstall", "update",
+        "update-custom", "update-local", "update-stanislav",
         "version", "webhook", "whatsapp", "chat", "secrets", "security",
         # Help-ish invocations — plugin commands not being listed in
         # top-level --help is an acceptable trade-off for skipping an

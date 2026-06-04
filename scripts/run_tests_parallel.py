@@ -49,6 +49,35 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
+def _configure_text_streams() -> None:
+    """Make runner output robust on non-UTF-8 Windows consoles."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+_configure_text_streams()
+
+
+def _pytest_env() -> dict[str, str]:
+    """Environment for child pytest processes.
+
+    Windows still often starts Python in the active ANSI code page unless UTF-8
+    mode is requested before interpreter startup. Force UTF-8 for test
+    subprocesses so fixture data containing symbols like checkmarks is stable
+    across local developer machines and CI.
+    """
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
+
+
 # Default test discovery roots.
 _DEFAULT_ROOTS = ["tests"]
 
@@ -122,8 +151,11 @@ def _count_tests(
         result = subprocess.run(
             cmd,
             cwd=repo_root,
+            env=_pytest_env(),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -283,9 +315,12 @@ def _run_one_file(
     proc = subprocess.Popen(
         cmd,
         cwd=repo_root,
+        env=_pytest_env(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         # POSIX: place the child at the head of its own process group so
         # _kill_tree can SIGKILL the group atomically.
         # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;

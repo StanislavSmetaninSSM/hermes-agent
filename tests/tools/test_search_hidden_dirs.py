@@ -14,8 +14,12 @@ directories, matching ripgrep's default behavior.
 """
 
 import subprocess
+import sys
 
 import pytest
+
+if sys.platform == "win32":
+    pytest.skip("POSIX search backend tests skipped on Windows", allow_module_level=True)
 
 
 @pytest.fixture

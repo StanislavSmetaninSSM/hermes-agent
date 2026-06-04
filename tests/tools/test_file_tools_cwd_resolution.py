@@ -126,8 +126,9 @@ def test_warning_fires_when_relative_path_escapes_workspace(_isolated_cwd, monke
 
     assert warn is not None
     assert "OUTSIDE the active workspace" in warn
-    assert str(decoy) in warn
-    assert str(workspace) in warn
+    assert str(decoy).replace("\\", "/") in warn.replace("\\\\", "/").replace("\\", "/")
+    normalized_warn = warn.replace("\\\\", "/").replace("\\", "/")
+    assert str(workspace).replace("\\", "/") in normalized_warn
 
 
 def test_no_warning_when_relative_path_inside_workspace(_isolated_cwd, monkeypatch):

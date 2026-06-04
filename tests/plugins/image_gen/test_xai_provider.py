@@ -168,7 +168,7 @@ class TestGenerate:
             result = provider.generate(prompt="A cat playing piano")
 
         assert result["success"] is True
-        assert result["image"].startswith("/"), (
+        assert result["image"].replace("\\", "/").startswith("/"), (
             f"URL response must be cached to an absolute path, got {result['image']!r}"
         )
         assert "imgen.x.ai" not in result["image"], (

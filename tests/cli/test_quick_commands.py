@@ -1,6 +1,7 @@
 """Tests for user-defined quick commands that bypass the agent loop."""
 import os
 import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 from rich.text import Text
 import pytest
@@ -61,11 +62,12 @@ class TestCLIQuickCommands:
         cli.console.print.assert_called_once()
 
     def test_exec_command_no_output_shows_fallback(self):
-        cli = self._make_cli({"empty": {"type": "exec", "command": "true"}})
+        cmd = subprocess.list2cmdline([sys.executable, "-c", ""])
+        cli = self._make_cli({"empty": {"type": "exec", "command": cmd}})
         cli.process_command("/empty")
         cli.console.print.assert_called_once()
-        args = cli.console.print.call_args[0][0]
-        assert "no output" in args.lower()
+        printed = self._printed_plain(cli.console.print.call_args[0][0])
+        assert "no output" in printed.lower()
 
     def test_alias_command_routes_to_target(self):
         """Alias quick commands rewrite to the target command."""

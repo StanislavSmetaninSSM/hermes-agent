@@ -3,6 +3,7 @@
 import os
 import json
 import shutil
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -1381,9 +1382,14 @@ class TestNewEndpoints:
         )
 
         assert resp.status_code == 200
-        wrapper_path = wrapper_dir / "writer"
+        wrapper_path = wrapper_dir / ("writer.bat" if sys.platform == "win32" else "writer")
         assert wrapper_path.exists()
-        assert wrapper_path.read_text() == '#!/bin/sh\nexec hermes -p writer "$@"\n'
+        expected = (
+            "@echo off\nhermes -p writer %*\n"
+            if sys.platform == "win32"
+            else '#!/bin/sh\nexec hermes -p writer "$@"\n'
+        )
+        assert wrapper_path.read_text() == expected
 
     def test_profiles_create_with_clone_from_default_copies_default_skills(self, monkeypatch):
         from hermes_constants import get_hermes_home

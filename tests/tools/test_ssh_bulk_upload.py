@@ -109,7 +109,7 @@ class TestSSHBulkUpload:
                 expected = os.path.join(staging_dir, "skills/my_skill.md")
                 staging_paths.append(expected)
                 assert os.path.islink(expected), f"Expected symlink at {expected}"
-                assert os.readlink(expected) == os.path.abspath(str(f1))
+                assert os.readlink(expected).removeprefix("\\\\?\\") == os.path.abspath(str(f1))
 
             mock = MagicMock()
             mock.stdout = MagicMock()

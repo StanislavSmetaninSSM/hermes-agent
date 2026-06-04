@@ -45,7 +45,7 @@ def test_home_relative_cwd_collapses_home(tmp_path, monkeypatch):
 def test_home_relative_cwd_leaves_abs_path_alone(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "other"))
     result = _home_relative_cwd(str(tmp_path / "outside" / "dir"))
-    assert result == str(tmp_path / "outside" / "dir")
+    assert result == str(tmp_path / "outside" / "dir").replace("\\", "/")
 
 
 def test_home_relative_cwd_empty_returns_empty():

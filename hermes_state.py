@@ -1678,7 +1678,7 @@ class SessionDB:
                 FROM sessions s
                 LEFT JOIN chain_max cm ON cm.root_id = s.id
                 {where_sql}
-                ORDER BY _effective_last_active DESC, s.started_at DESC, s.id DESC
+                ORDER BY _effective_last_active DESC, s.started_at DESC, s.rowid DESC
                 LIMIT ? OFFSET ?
             """
             # WHERE params apply twice (CTE seed + outer select).
@@ -1699,7 +1699,7 @@ class SessionDB:
                     ) AS last_active
                 FROM sessions s
                 {where_sql}
-                ORDER BY s.started_at DESC
+                ORDER BY s.started_at DESC, s.rowid DESC
                 LIMIT ? OFFSET ?
             """
             params.extend([limit, offset])
@@ -3669,7 +3669,7 @@ class SessionDB:
             try:
                 rows = self._conn.execute(
                     "SELECT * FROM telegram_dm_topic_bindings "
-                    "WHERE chat_id = ? ORDER BY updated_at DESC",
+                    "WHERE chat_id = ? ORDER BY updated_at DESC, rowid DESC",
                     (str(chat_id),),
                 ).fetchall()
             except sqlite3.OperationalError:

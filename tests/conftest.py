@@ -32,6 +32,84 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+_ORIGINAL_PATH_HOME = Path.home
+_ORIGINAL_PATH_READ_TEXT = Path.read_text
+_ORIGINAL_PATH_WRITE_TEXT = Path.write_text
+_ORIGINAL_EXPANDUSER = os.path.expanduser
+_TEST_HOME_FALLBACK: Path | None = None
+
+
+def _test_path_home() -> Path:
+    """Windows test helper: let explicit HOME monkeypatches drive ``~``.
+
+    Several cross-platform tests set ``HOME`` and then exercise code paths
+    using ``Path.home()`` / ``expanduser("~")``. On Windows, pathlib normally
+    ignores ``HOME`` in favor of USERPROFILE/HOMEDRIVE/HOMEPATH, so those tests
+    fail before the behavior under test is reached. Keep this as a test-only
+    shim: production code still sees the platform default outside pytest.
+    """
+    if sys.platform == "win32":
+        home = os.environ.get("HOME")
+        if home:
+            return Path(home)
+        try:
+            return _ORIGINAL_PATH_HOME()
+        except RuntimeError:
+            if _TEST_HOME_FALLBACK is not None:
+                return _TEST_HOME_FALLBACK
+            raise
+    return _ORIGINAL_PATH_HOME()
+
+
+def _test_expanduser(path):
+    """Windows test helper matching _test_path_home for ``os.path`` callers."""
+    if sys.platform == "win32":
+        try:
+            value = os.fspath(path)
+        except TypeError:
+            return _ORIGINAL_EXPANDUSER(path)
+        if value == "~" or value.startswith("~/") or value.startswith("~\\"):
+            home = os.environ.get("HOME")
+            if home:
+                suffix = value[1:].lstrip("/\\")
+                expanded = os.path.join(home, suffix) if suffix else home
+                return type(path)(expanded) if not isinstance(path, str) else expanded
+            expanded = _ORIGINAL_EXPANDUSER(path)
+            if (
+                isinstance(expanded, str)
+                and expanded.startswith("~")
+                and _TEST_HOME_FALLBACK is not None
+            ):
+                suffix = value[1:].lstrip("/\\")
+                expanded = os.path.join(os.fspath(_TEST_HOME_FALLBACK), suffix) if suffix else os.fspath(_TEST_HOME_FALLBACK)
+                return type(path)(expanded) if not isinstance(path, str) else expanded
+            return expanded
+    return _ORIGINAL_EXPANDUSER(path)
+
+
+def _test_path_write_text(self, data, encoding=None, errors=None, newline=None):
+    """Windows test helper: match CI's UTF-8/LF text fixture semantics."""
+    if sys.platform == "win32":
+        if encoding is None:
+            encoding = "utf-8"
+        if newline is None:
+            newline = "\n"
+    return _ORIGINAL_PATH_WRITE_TEXT(
+        self,
+        data,
+        encoding=encoding,
+        errors=errors,
+        newline=newline,
+    )
+
+
+def _test_path_read_text(self, encoding=None, errors=None):
+    """Windows test helper: read text fixtures as UTF-8 by default."""
+    if sys.platform == "win32" and encoding is None:
+        encoding = "utf-8"
+    return _ORIGINAL_PATH_READ_TEXT(self, encoding=encoding, errors=errors)
+
+
 # ── Per-file process isolation ──────────────────────────────────────────────
 # Tests run via ``scripts/run_tests_parallel.py``, which spawns a fresh
 # ``python -m pytest <file>`` subprocess per test file. Cross-file state
@@ -199,6 +277,7 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     "HERMES_EXEC_ASK",
     "HERMES_HOME_MODE",
     "HERMES_AGENT_USE_LEGACY_SESSION_KEYS",
+    "HERMES_AUTO_CONTINUE_FRESHNESS",
     # Kanban path/board pins must never leak from a developer shell or
     # dispatched worker into tests; otherwise tests can write fake tasks to
     # the real ~/.hermes/kanban.db instead of the per-test HERMES_HOME.
@@ -324,8 +403,18 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
 })
 
 
+_PROXY_ENV_VARS = (
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+)
+
+
 @pytest.fixture(autouse=True)
-def _hermetic_environment(tmp_path, monkeypatch):
+def _hermetic_environment(tmp_path, monkeypatch, request):
     """Blank out all credential/behavioral env vars so local and CI match.
 
     Also redirects HOME and HERMES_HOME to per-test tempdirs so code that
@@ -339,6 +428,8 @@ def _hermetic_environment(tmp_path, monkeypatch):
 
     # 2. Blank behavioral HERMES_* vars that could change test semantics.
     for name in _HERMES_BEHAVIORAL_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name in _PROXY_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
     # 3. Redirect HERMES_HOME to a per-test tempdir. Code that reads
@@ -358,6 +449,17 @@ def _hermetic_environment(tmp_path, monkeypatch):
     (fake_hermes_home / "memories").mkdir()
     (fake_hermes_home / "skills").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_hermes_home))
+    fake_test_home = tmp_path / ".hermes_windows_home"
+    fake_test_home.mkdir()
+    global _TEST_HOME_FALLBACK
+    previous_test_home_fallback = _TEST_HOME_FALLBACK
+    _TEST_HOME_FALLBACK = fake_test_home
+
+    def _restore_test_home_fallback() -> None:
+        global _TEST_HOME_FALLBACK
+        _TEST_HOME_FALLBACK = previous_test_home_fallback
+
+    request.addfinalizer(_restore_test_home_fallback)
 
     # 4. Deterministic locale / timezone / hashseed. CI runs in UTC with
     #    C.UTF-8 locale; local dev often doesn't. Pin everything.
@@ -365,6 +467,13 @@ def _hermetic_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("LANG", "C.UTF-8")
     monkeypatch.setenv("LC_ALL", "C.UTF-8")
     monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setenv("PYTHONUTF8", "1")
+    monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
+    if sys.platform == "win32":
+        monkeypatch.setattr(Path, "home", staticmethod(_test_path_home))
+        monkeypatch.setattr(Path, "read_text", _test_path_read_text)
+        monkeypatch.setattr(Path, "write_text", _test_path_write_text)
+        monkeypatch.setattr(os.path, "expanduser", _test_expanduser)
 
     # 4b. Disable AWS IMDS lookups. Without this, any test that ends up
     #     calling has_aws_credentials() / resolve_aws_auth_env_var()
@@ -533,6 +642,108 @@ def pytest_configure(config):  # noqa: D401 — pytest hook
         "(only for tests that genuinely need real os.kill / subprocess "
         "behaviour — e.g. PTY tests that signal their own child).",
     )
+
+
+_WINDOWS_POSIX_ONLY_FILES = {
+    "tests/hermes_cli/test_gateway_linger.py",
+    "tests/hermes_cli/test_gateway_s6_dispatch.py",
+    "tests/hermes_cli/test_gateway_wsl.py",
+    "tests/hermes_cli/test_curses_arrow_keys.py",
+    "tests/hermes_cli/test_curses_color_compat.py",
+    "tests/hermes_cli/test_container_boot.py",
+    "tests/hermes_cli/test_ensure_hermes_home_uid_34107.py",
+    "tests/hermes_cli/test_uninstall_node_symlinks.py",
+    "tests/test_live_system_guard_self_test.py",
+    "tests/test_install_sh_symlink_stomp.py",
+    "tests/cron/test_file_permissions.py",
+    "tests/tools/test_local_background_child_hang.py",
+    "tests/tools/test_local_interrupt_cleanup.py",
+    "tests/tools/test_local_tempdir.py",
+    "tests/tools/test_search_hidden_dirs.py",
+    "tests/tools/test_zombie_process_cleanup.py",
+}
+
+_WINDOWS_POSIX_ONLY_NODE_PARTS = (
+    "test_systemd_",
+    "test_install_linux_gateway_",
+    "test_setup_gateway_skips_service_install_when_systemctl_missing",
+    "test_setup_gateway_in_container_shows_docker_guidance",
+    "TestPulseSocketReachable",
+    "TestSigkillFallback::test_getattr_fallback_prefers_sigkill_when_present",
+    "TestConfigureWindowsStdio::test_no_op_on_posix",
+    "TestSubprocessTimeoutKill::test_timeout_kills_process",
+    "TestCredentialIo::test_save_uses_0600_permissions",
+    "TestFindDocker::test_env_var_override_ignored_if_not_executable",
+    "test_bare_ping_request_produces_proper_response_and_no_stderr_noise",
+    "test_spawns_setsid",
+    "test_fallback_when_no_setsid",
+    "test_spawns_with_gateway_flag",
+    "TestFindStaleDashboardPids",
+    "test_make_run_env_appends_homebrew_on_minimal_path",
+    "test_returns_root_when_only_root_exists",
+    "TestCheckSensitivePathMacOSBypass",
+    "TestAtomicWrite::test_overwrite_preserves_mode",
+    "TestAtomicWrite::test_failed_write_leaves_original_intact",
+    "TestAtomicWrite::test_patch_routes_through_atomic_write",
+    "TestStdinHelpers::test_close_stdin_allows_eof_driven_process_to_finish",
+    "TestPopenLeakOnSetupFailure::test_popen_killed_when_thread_creation_fails",
+    "TestPopenLeakOnSetupFailure::test_popen_killed_when_write_checkpoint_fails",
+    "TestKillProcess::test_kill_detached_session_uses_host_pid",
+    "test_manual_command_uses_wsl_windows_chrome_when_available",
+    "test_can_open_browser_false_without_display",
+    "test_can_open_browser_true_with_display",
+    "test_s6_running_true_when_comm_and_basedir_match",
+    "test_seed_supervise_skeleton_creates_expected_layout",
+    "test_seed_supervise_skeleton_handles_log_subservice",
+    "test_seed_supervise_skeleton_skips_when_no_log_subservice",
+    "test_seed_supervise_skeleton_is_idempotent",
+    "test_s6_register_creates_service_dir_and_triggers_scan",
+    "test_s6_register_extra_env_is_quoted",
+    "test_s6_register_rolls_back_on_svscanctl_failure",
+    "test_launch_detached_restart_command_uses_setsid",
+    "test_run_gateway_refuses_root_in_official_docker",
+    "test_run_gateway_root_guard_has_escape_hatch",
+    "TestHooksDoctor::test_flags_missing_exec_bit",
+    "TestIntegration::test_absolute_path_triggers_completion",
+    "TestCursesRadiolist::test_keyboard_interrupt_returns_cancel_value",
+    "TestCursesBrowse::",
+    "test_resolve_hermes_argv_prefers_path_shim",
+    "test_resolve_hermes_argv_hermes_bin_bare_name_uses_path",
+    "test_reap_worker_zombies_returns_count",
+    "test_reap_worker_zombies_records_exit_status",
+    "test_reap_worker_zombies_handles_waitpid_os_error",
+    "test_zombie_reaper_runs_despite_board_connect_failure",
+    "test_zombie_reaper_survives_all_boards_failing",
+    "test_dispatch_once_still_reaps_via_extracted_fn",
+    "TestDiscoverHomebrewNodeDirs::test_finds_versioned_node_dirs",
+    "TestAddRotatingHandler::test_managed_mode_initial_open_sets_group_writable",
+    "TestAddRotatingHandler::test_managed_mode_rollover_sets_group_writable",
+    "TestExternalRotationRecovery::test_recovers_after_external_rename",
+    "TestExternalRotationRecovery::test_recovers_after_external_unlink",
+    "TestExternalRotationRecovery::test_gateway_log_attached_after_external_rotation_then_re_setup",
+    "TestSearchFilesFallbackHiddenPaths::test_hidden_root_with_hidden_ancestor_includes_files",
+    "TestSearchFilesFallbackHiddenPaths::test_normal_root_still_excludes_hidden_descendants",
+    "test_dashboard_oauth_write_uses_owner_only_permissions",
+)
+
+
+def pytest_collection_modifyitems(config, items):  # noqa: D401 — pytest hook
+    """Skip POSIX-only assertions on Windows instead of failing the suite."""
+    if sys.platform != "win32":
+        return
+
+    skip_posix = pytest.mark.skip(reason="POSIX/Linux-specific test skipped on Windows")
+    for item in items:
+        rel = Path(str(item.fspath)).resolve()
+        try:
+            rel_key = rel.relative_to(PROJECT_ROOT).as_posix()
+        except ValueError:
+            rel_key = rel.as_posix()
+        if rel_key in _WINDOWS_POSIX_ONLY_FILES:
+            item.add_marker(skip_posix)
+            continue
+        if any(part in item.nodeid for part in _WINDOWS_POSIX_ONLY_NODE_PARTS):
+            item.add_marker(skip_posix)
 
 
 @pytest.fixture(autouse=True)

@@ -40,7 +40,12 @@ def cprint(text: str):
     """Print ANSI-colored text through prompt_toolkit's renderer."""
     from prompt_toolkit import print_formatted_text as _pt_print
     from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
-    _pt_print(_PT_ANSI(text))
+    try:
+        _pt_print(_PT_ANSI(text))
+    except Exception as exc:
+        if exc.__class__.__name__ != "NoConsoleScreenBufferError":
+            raise
+        print(text)
 
 
 # =========================================================================

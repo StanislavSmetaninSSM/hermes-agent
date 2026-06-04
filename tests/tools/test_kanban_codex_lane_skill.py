@@ -42,8 +42,10 @@ def test_kanban_codex_lane_skill_is_discoverable_with_template(monkeypatch, tmp_
 
     viewed = json.loads(skills_tool.skill_view("kanban-codex-lane"))
     assert viewed["success"] is True
-    assert viewed["path"].endswith("kanban-codex-lane/SKILL.md")
-    assert viewed["linked_files"]["templates"] == ["templates/pmb-codex-lane-prompt.md"]
+    assert viewed["path"].replace("\\", "/").endswith("kanban-codex-lane/SKILL.md")
+    assert [p.replace("\\", "/") for p in viewed["linked_files"]["templates"]] == [
+        "templates/pmb-codex-lane-prompt.md"
+    ]
 
     template = json.loads(
         skills_tool.skill_view(

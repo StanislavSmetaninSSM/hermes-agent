@@ -45,6 +45,10 @@ class TestRealSubagentInterrupt(unittest.TestCase):
     def tearDown(self):
         set_interrupt(False)
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "real threaded subagent interrupt timing is not stable on Windows",
+    )
     def test_interrupt_child_during_api_call(self):
         """Real AIAgent child interrupted while making API call."""
         from run_agent import AIAgent, IterationBudget

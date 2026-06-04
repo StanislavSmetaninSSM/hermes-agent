@@ -9,6 +9,7 @@ covered in ``test_shell_hooks_consent.py``.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,10 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     path.write_text(body)
     path.chmod(0o755)
     return path
+
+
+def _bash_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
 
 
 def _allowlist_pair(monkeypatch, tmp_path, event: str, command: str) -> None:
@@ -341,7 +346,7 @@ class TestCallbackSubprocess:
         script = _write_script(
             tmp_path, "log.sh",
             f"#!/usr/bin/env bash\n"
-            f"echo \"$(cat -)\" >> {calls}\n"
+            f"echo \"$(cat -)\" >> {_bash_path(calls)}\n"
             f"printf '{{}}\\n'\n",
         )
         spec = shell_hooks.ShellHookSpec(
@@ -361,7 +366,7 @@ class TestCallbackSubprocess:
         capture = tmp_path / "payload.json"
         script = _write_script(
             tmp_path, "capture.sh",
-            f"#!/usr/bin/env bash\ncat - > {capture}\nprintf '{{}}\\n'\n",
+            f"#!/usr/bin/env bash\ncat - > {_bash_path(capture)}\nprintf '{{}}\\n'\n",
         )
         spec = shell_hooks.ShellHookSpec(
             event="pre_tool_call", command=str(script),
@@ -672,12 +677,15 @@ class TestAllowlistConcurrency:
         assert shell_hooks.script_is_executable(f"python3 {script}")
         assert shell_hooks.script_is_executable(f"/usr/bin/env python3 {script}")
 
-        # Bare invocation on the same non-X_OK file: not runnable.
-        assert not shell_hooks.script_is_executable(str(script))
+        # Bare invocation on the same non-X_OK file: not runnable on POSIX.
+        # Windows does not expose POSIX executable bits through os.access().
+        if sys.platform != "win32":
+            assert not shell_hooks.script_is_executable(str(script))
 
         # Flip +x; bare invocation is now runnable too.
         script.chmod(0o755)
-        assert shell_hooks.script_is_executable(str(script))
+        if sys.platform != "win32":
+            assert shell_hooks.script_is_executable(str(script))
 
     def test_command_script_path_resolution(self):
         """Regression: ``_command_script_path`` used to return the first

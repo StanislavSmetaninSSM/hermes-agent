@@ -135,12 +135,21 @@ _MARKER_TTL = 86400  # 24 hours
 
 def _get_hermes_home() -> str:
     """Return the Hermes home directory, respecting HERMES_HOME env var."""
-    return str(get_hermes_home())
+    override = os.getenv("HERMES_HOME")
+    if override:
+        return override
+    try:
+        return str(get_hermes_home())
+    except Exception:
+        return os.path.join(os.path.expanduser("~"), ".hermes")
 
 
 def _failure_marker_path() -> str:
     """Return the path to the install-failure marker file."""
-    return os.path.join(_get_hermes_home(), ".tirith-install-failed")
+    home = _get_hermes_home()
+    if "/" in home and "\\" not in home:
+        return f"{home.rstrip('/')}/.tirith-install-failed"
+    return os.path.join(home, ".tirith-install-failed")
 
 
 def _read_failure_reason() -> str | None:

@@ -59,6 +59,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -380,13 +381,19 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
         "error": None,
     }
     try:
-        argv = shlex.split(os.path.expanduser(spec.command))
+        argv = _split_command(os.path.expanduser(spec.command))
     except ValueError as exc:
         result["error"] = f"command {spec.command!r} cannot be parsed: {exc}"
         return result
     if not argv:
         result["error"] = "empty command"
         return result
+    if sys.platform == "win32":
+        first = os.path.expanduser(argv[0])
+        if first.lower().endswith(".sh") and os.path.isfile(first):
+            bash = shutil.which("bash")
+            if bash:
+                argv = [bash, first, *argv[1:]]
 
     t0 = time.monotonic()
     try:
@@ -396,6 +403,8 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
             capture_output=True,
             timeout=spec.timeout,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
         )
     except subprocess.TimeoutExpired:
@@ -722,6 +731,19 @@ _SCRIPT_EXTENSIONS: Tuple[str, ...] = (
     ".js", ".mjs", ".cjs", ".ts",
 )
 
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def _split_command(command: str) -> List[str]:
+    """Split command text without corrupting Windows drive-letter paths."""
+    return shlex.split(
+        command,
+        posix=not (
+            sys.platform == "win32"
+            and _WINDOWS_DRIVE_PATH_RE.search(command)
+        ),
+    )
+
 
 def _command_script_path(command: str) -> str:
     """Return the script path from ``command`` for doctor / drift checks.
@@ -731,8 +753,19 @@ def _command_script_path(command: str) -> str:
     ``python3 /path/hook.py``, ``/usr/bin/env bash hook.sh``, and the
     common bare-path form.
     """
+    bare_command = command.strip()
+    if bare_command:
+        unquoted = bare_command
+        if (
+            len(unquoted) >= 2
+            and unquoted[0] == unquoted[-1]
+            and unquoted[0] in {'"', "'"}
+        ):
+            unquoted = unquoted[1:-1]
+        if os.path.exists(os.path.expanduser(unquoted)):
+            return unquoted
     try:
-        parts = shlex.split(command)
+        parts = _split_command(command)
     except ValueError:
         return command
     if not parts:
@@ -819,7 +852,7 @@ def script_is_executable(command: str) -> bool:
     if not os.path.isfile(expanded):
         return False
     try:
-        argv = shlex.split(command)
+        argv = _split_command(command)
     except ValueError:
         return False
     is_bare_invocation = bool(argv) and argv[0] == path

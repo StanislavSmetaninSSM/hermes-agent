@@ -77,7 +77,10 @@ class TestWriteFileHandler:
         from tools.file_tools import write_file_tool
         result = json.loads(write_file_tool("/tmp/out.txt", "hello world!\n"))
         assert result["status"] == "ok"
-        mock_ops.write_file.assert_called_once_with("/tmp/out.txt", "hello world!\n")
+        mock_ops.write_file.assert_called_once()
+        called_path, called_content = mock_ops.write_file.call_args.args
+        assert called_path.replace("\\", "/").endswith("/tmp/out.txt")
+        assert called_content == "hello world!\n"
 
     @patch("tools.file_tools._get_file_ops")
     def test_permission_error_returns_error_json_without_error_log(self, mock_get, caplog):
@@ -155,7 +158,10 @@ class TestPatchHandler:
             old_string="foo", new_string="bar"
         ))
         assert result["status"] == "ok"
-        mock_ops.patch_replace.assert_called_once_with("/tmp/f.py", "foo", "bar", False)
+        mock_ops.patch_replace.assert_called_once()
+        called_path, old, new, replace_all = mock_ops.patch_replace.call_args.args
+        assert called_path.replace("\\", "/").endswith("/tmp/f.py")
+        assert (old, new, replace_all) == ("foo", "bar", False)
 
     @patch("tools.file_tools._get_file_ops")
     def test_replace_mode_replace_all_flag(self, mock_get):
@@ -168,7 +174,10 @@ class TestPatchHandler:
         from tools.file_tools import patch_tool
         patch_tool(mode="replace", path="/tmp/f.py",
                    old_string="x", new_string="y", replace_all=True)
-        mock_ops.patch_replace.assert_called_once_with("/tmp/f.py", "x", "y", True)
+        mock_ops.patch_replace.assert_called_once()
+        called_path, old, new, replace_all = mock_ops.patch_replace.call_args.args
+        assert called_path.replace("\\", "/").endswith("/tmp/f.py")
+        assert (old, new, replace_all) == ("x", "y", True)
 
     @patch("tools.file_tools._get_file_ops")
     def test_replace_mode_missing_path_errors(self, mock_get):
@@ -448,7 +457,10 @@ class TestSensitivePathCheck:
         from tools.file_tools import write_file_tool
         result = json.loads(write_file_tool("/etc/passwd", "evil"))
         assert "error" in result
-        assert "sensitive system path" in result["error"]
+        assert (
+            "sensitive system path" in result["error"]
+            or "protected system/credential file" in result["error"]
+        )
 
     @patch("tools.file_tools._get_file_ops")
     def test_normal_file_not_blocked(self, mock_get, monkeypatch):

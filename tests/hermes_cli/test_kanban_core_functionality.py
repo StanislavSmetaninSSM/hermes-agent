@@ -3754,7 +3754,7 @@ def test_gateway_dispatcher_retries_corrupt_board_after_quarantine(
         caller = inspect.currentframe().f_back  # type: ignore[union-attr]
         code = caller.f_code if caller is not None else None
         filename = code.co_filename if code is not None else ""
-        if filename.endswith("gateway/run.py"):
+        if filename.replace("\\", "/").endswith("gateway/run.py"):
             return next(time_values, 1301.0)
         return real_monotonic()
 
@@ -4339,6 +4339,8 @@ def test_detect_crashed_workers_increments_counter(kanban_home):
 
 
 def test_detect_crashed_workers_protocol_violation_auto_blocks(kanban_home):
+    if os.name == "nt":
+        pytest.skip("POSIX waitpid exit-status classification is not available on Windows")
     """A worker that exited rc=0 while its task was still ``running``
     is a protocol violation (agent answered conversationally without
     calling kanban_complete / kanban_block). Retrying will just loop,

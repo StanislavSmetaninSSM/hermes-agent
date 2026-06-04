@@ -603,6 +603,7 @@ class TestResumePendingSystemNote:
             "start a new task",
             resume_entry=None,
             agent_history=agent_history,
+            window_secs=1800,
         )
         assert result == "start a new task"
 

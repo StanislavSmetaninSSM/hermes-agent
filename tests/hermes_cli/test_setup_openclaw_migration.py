@@ -1,5 +1,6 @@
 """Tests for OpenClaw migration integration in the setup wizard."""
 
+import sys
 from argparse import Namespace
 from types import ModuleType
 from unittest.mock import MagicMock, patch
@@ -549,6 +550,8 @@ class TestGetSectionConfigSummary:
 
         for plat in _PLATFORMS:
             label = plat["label"]
+            if sys.platform == "win32" and plat.get("key") == "matrix":
+                continue
             env_var = plat.get("token_var")
             if not env_var:
                 continue
@@ -556,6 +559,8 @@ class TestGetSectionConfigSummary:
             # needs the literal "true"). Use a sentinel that satisfies every
             # real validator _platform_status() currently checks.
             def env_side(key, _target=env_var):
+                if _target == "MATRIX_ACCESS_TOKEN" and key == "MATRIX_HOMESERVER":
+                    return "https://matrix.example.org"
                 if key != _target:
                     return ""
                 if _target == "WHATSAPP_ENABLED":

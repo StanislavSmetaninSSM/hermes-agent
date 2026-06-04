@@ -15,12 +15,14 @@ from tools.tirith_security import check_command_security, ensure_installed
 
 
 @pytest.fixture(autouse=True)
-def _reset_resolved_path():
+def _reset_resolved_path(request, monkeypatch):
     """Pre-set cached path to skip auto-install in scan tests.
 
     Tests that specifically test ensure_installed / resolve behavior
     reset this to None themselves.
     """
+    if "TestUnsupportedPlatform" not in request.node.nodeid:
+        monkeypatch.setattr(_tirith_mod, "is_platform_supported", lambda: True)
     _tirith_mod._resolved_path = "tirith"
     _tirith_mod._install_thread = None
     _tirith_mod._install_failure_reason = ""

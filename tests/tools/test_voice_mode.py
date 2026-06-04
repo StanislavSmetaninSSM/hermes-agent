@@ -1400,9 +1400,10 @@ class TestConfigurableSilenceParams:
 
         # Now send really loud audio (above 5000 threshold)
         very_loud = np.full((1600, 1), 8000, dtype="int16")
-        callback(very_loud, 1600, None, None)
-        time.sleep(0.06)
-        callback(very_loud, 1600, None, None)
+        deadline = time.monotonic() + 0.5
+        while not recorder._has_spoken and time.monotonic() < deadline:
+            callback(very_loud, 1600, None, None)
+            time.sleep(0.02)
         assert recorder._has_spoken is True
 
         recorder.cancel()

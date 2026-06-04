@@ -50,7 +50,11 @@ def _build_runner(monkeypatch, tmp_path, mode: str) -> GatewayRunner:
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
 
     runner = GatewayRunner(GatewayConfig())
-    adapter = SimpleNamespace(send=AsyncMock(), handle_message=AsyncMock())
+    adapter = SimpleNamespace(
+        send=AsyncMock(),
+        handle_message=AsyncMock(),
+        _pending_messages={},
+    )
     runner.adapters[Platform.TELEGRAM] = adapter
     return runner
 

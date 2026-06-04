@@ -111,7 +111,7 @@ class TestBuildRelaunchArgv:
 
     def test_falls_back_to_python_module(self, monkeypatch):
         monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: None)
-        argv = relaunch_mod.build_relaunch_argv(["--resume", "abc"])
+        argv = relaunch_mod.build_relaunch_argv(["--resume", "abc"], original_argv=[])
         assert argv == [sys.executable, "-m", "hermes_cli.main", "--resume", "abc"]
 
     def test_preserves_inherited_flags(self, monkeypatch):
@@ -140,6 +140,8 @@ class TestBuildRelaunchArgv:
 
 class TestRelaunch:
     def test_calls_execvp(self, monkeypatch):
+        if sys.platform == "win32":
+            pytest.skip("POSIX execvp relaunch path is not used on Windows")
         calls = []
 
         def fake_execvp(path, argv):
@@ -150,7 +152,7 @@ class TestRelaunch:
         monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: "/usr/bin/hermes")
 
         with pytest.raises(SystemExit):
-            relaunch_mod.relaunch(["--resume", "abc"])
+            relaunch_mod.relaunch(["--resume", "abc"], original_argv=[])
 
         assert calls == [("/usr/bin/hermes", ["/usr/bin/hermes", "--resume", "abc"])]
 
@@ -184,7 +186,7 @@ class TestRelaunch:
         monkeypatch.setattr(relaunch_mod.os, "execvp", fake_execvp)
 
         with pytest.raises(SystemExit) as exc_info:
-            relaunch_mod.relaunch(["chat"])
+            relaunch_mod.relaunch(["chat"], original_argv=[])
 
         assert exc_info.value.code == 0
         assert execvp_calls == []

@@ -9,6 +9,13 @@ black" / dim gray) which does not exist on 8-color terminals.  The fix
 clamps with ``min(8, curses.COLORS - 1)``.
 """
 
+import sys
+
+import pytest
+
+if sys.platform == "win32":
+    pytest.skip("curses is not available on Windows", allow_module_level=True)
+
 import curses
 import re
 from pathlib import Path

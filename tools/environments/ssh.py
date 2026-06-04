@@ -7,7 +7,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from tools.environments.base import BaseEnvironment, _popen_bash
 from tools.environments.file_sync import (
@@ -182,18 +182,21 @@ class SSHEnvironment(BaseEnvironment):
         with tempfile.TemporaryDirectory(prefix="hermes-ssh-bulk-") as staging:
             for host_path, remote_path in files:
                 try:
-                    rel_remote = os.path.relpath(remote_path, base)
+                    rel_remote_path = PurePosixPath(remote_path).relative_to(
+                        PurePosixPath(base)
+                    )
                 except ValueError as exc:
                     raise RuntimeError(
                         f"remote path {remote_path!r} is not under sync base {base!r}"
                     ) from exc
+                rel_remote = rel_remote_path.as_posix()
 
                 if rel_remote == "." or rel_remote.startswith("../"):
                     raise RuntimeError(
                         f"remote path {remote_path!r} escapes sync base {base!r}"
                     )
 
-                staged = os.path.join(staging, rel_remote)
+                staged = os.path.join(staging, *rel_remote.split("/"))
                 os.makedirs(os.path.dirname(staged), exist_ok=True)
                 os.symlink(os.path.abspath(host_path), staged)
 
