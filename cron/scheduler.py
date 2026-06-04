@@ -848,6 +848,42 @@ def _get_script_timeout() -> int:
     return _DEFAULT_SCRIPT_TIMEOUT
 
 
+def _resolve_cron_inactivity_timeout() -> float:
+    """Resolve cron agent inactivity timeout in seconds.
+
+    ``HERMES_CRON_TIMEOUT`` remains the highest-priority override for backward
+    compatibility. ``cron.inactivity_timeout_seconds`` in config.yaml is the
+    persistent, user-visible setting. ``0`` means unlimited.
+    """
+    env_value = os.getenv("HERMES_CRON_TIMEOUT", "").strip()
+    if env_value:
+        try:
+            return float(env_value)
+        except (ValueError, TypeError):
+            logger.warning(
+                "Invalid HERMES_CRON_TIMEOUT=%r; using default 600s",
+                env_value,
+            )
+            return 600.0
+
+    try:
+        cfg = load_config() or {}
+        cron_cfg = cfg.get("cron", {}) if isinstance(cfg, dict) else {}
+        configured = cron_cfg.get("inactivity_timeout_seconds")
+        if configured is None:
+            configured = cron_cfg.get("timeout_seconds")
+        if configured is None:
+            configured = cron_cfg.get("timeout")
+        if configured is not None:
+            return float(configured)
+    except (ValueError, TypeError):
+        logger.warning("Invalid cron inactivity timeout in config; using default 600s")
+    except Exception as exc:
+        logger.debug("Failed to load cron inactivity timeout from config: %s", exc)
+
+    return 600.0
+
+
 def _run_job_script(script_path: str) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
@@ -1667,22 +1703,12 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         # for hours if it's actively calling tools / receiving stream tokens,
         # but a hung API call or stuck tool with no activity for the configured
         # duration is caught and killed.  Default 600s (10 min inactivity);
-        # override via HERMES_CRON_TIMEOUT env var.  0 = unlimited.
+        # override via HERMES_CRON_TIMEOUT env var or
+        # cron.inactivity_timeout_seconds in config.yaml.  0 = unlimited.
         #
         # Uses the agent's built-in activity tracker (updated by
         # _touch_activity() on every tool call, API call, and stream delta).
-        _raw_cron_timeout = os.getenv("HERMES_CRON_TIMEOUT", "").strip()
-        if _raw_cron_timeout:
-            try:
-                _cron_timeout = float(_raw_cron_timeout)
-            except (ValueError, TypeError):
-                logger.warning(
-                    "Invalid HERMES_CRON_TIMEOUT=%r; using default 600s",
-                    _raw_cron_timeout,
-                )
-                _cron_timeout = 600.0
-        else:
-            _cron_timeout = 600.0
+        _cron_timeout = _resolve_cron_inactivity_timeout()
         _cron_inactivity_limit = _cron_timeout if _cron_timeout > 0 else None
         _POLL_INTERVAL = 5.0
         _cron_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)

@@ -316,6 +316,66 @@ def test_event_idle_kills_after_first_event_then_silence(tmp_path, monkeypatch):
         stop["flag"] = True
 
 
+def test_event_idle_watchdog_does_not_block_on_hung_abort(tmp_path, monkeypatch):
+    """The watchdog must not hang the agent if cross-thread client abort hangs.
+
+    Production symptom: after a large Codex request emitted one SSE frame and
+    then went quiet, the watchdog logged ``codex_stream_idle_kill`` but the
+    Telegram turn never reached the retry/failure path. A stuck abort must be
+    best-effort, not part of the critical path.
+    """
+    from agent import chat_completion_helpers as h
+
+    agent = _make_codex_agent(tmp_path, monkeypatch)
+    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("HERMES_OPENAI_ABORT_JOIN_TIMEOUT_SECONDS", "0.05")
+
+    closes: list = []
+    abort_started = False
+    abort_release = False
+    dummy_client = SimpleNamespace()
+    monkeypatch.setattr(agent, "_create_request_openai_client", lambda **k: dummy_client)
+
+    def fake_hung_abort(_client, reason=None):
+        nonlocal abort_started
+        abort_started = True
+        deadline = time.time() + 30
+        while time.time() < deadline and not abort_release:
+            time.sleep(0.02)
+        closes.append(reason)
+
+    monkeypatch.setattr(agent, "_abort_request_openai_client", fake_hung_abort)
+    monkeypatch.setattr(
+        agent,
+        "_close_request_openai_client",
+        lambda c, reason=None: closes.append(reason),
+    )
+
+    stop = {"flag": False}
+
+    def fake_stream(api_kwargs, client=None, on_first_delta=None):
+        agent._codex_stream_last_event_ts = time.time()
+        deadline = time.time() + 30
+        while time.time() < deadline and not stop["flag"] and not agent._interrupt_requested:
+            time.sleep(0.02)
+        raise RuntimeError("connection closed")
+
+    monkeypatch.setattr(agent, "_run_codex_stream", fake_stream)
+
+    t0 = time.time()
+    try:
+        with pytest.raises(TimeoutError) as excinfo:
+            h.interruptible_api_call(agent, {"model": "gpt-5.5", "input": "hi"})
+        elapsed = time.time() - t0
+        assert "after first byte" in str(excinfo.value)
+        assert abort_started
+        assert elapsed < 5, f"watchdog blocked on hung abort for {elapsed:.1f}s"
+    finally:
+        stop["flag"] = True
+        abort_release = True
+
+
 def test_ttfb_disabled_via_env_zero(tmp_path, monkeypatch):
     """Setting HERMES_CODEX_TTFB_TIMEOUT_SECONDS=0 disables the TTFB watchdog;
     a no-event stall then falls through to the (here, 60s) stale timeout, so a

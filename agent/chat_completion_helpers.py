@@ -122,6 +122,49 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _abort_request_client_without_blocking(agent: Any, request_client: Any, reason: str) -> None:
+    """Run stranger-thread request-client abort as best-effort work.
+
+    Watchdogs must not get stuck while trying to abort a stuck HTTP stream.
+    The worker thread still owns the eventual full close; this helper only
+    starts the safe shutdown-only abort path and lets the caller continue.
+    """
+
+    def _abort_in_background() -> None:
+        try:
+            agent._abort_request_openai_client(request_client, reason=reason)
+        except Exception as exc:
+            logger.debug(
+                "OpenAI client background abort failed (%s) %s error=%s",
+                reason,
+                agent._client_log_context(),
+                exc,
+            )
+
+    t_abort = threading.Thread(
+        target=_abort_in_background,
+        name=f"openai-abort-{reason[:32]}",
+        daemon=True,
+    )
+    t_abort.start()
+    try:
+        abort_join_timeout = float(
+            os.getenv("HERMES_OPENAI_ABORT_JOIN_TIMEOUT_SECONDS", "1.0")
+        )
+    except (ValueError, TypeError):
+        abort_join_timeout = 1.0
+    if abort_join_timeout > 0:
+        t_abort.join(timeout=abort_join_timeout)
+    if t_abort.is_alive():
+        logger.warning(
+            "OpenAI client abort (%s) still running after %.1fs; "
+            "continuing watchdog failure path without blocking. %s",
+            reason,
+            max(abort_join_timeout, 0.0),
+            agent._client_log_context(),
+        )
+
+
 def interruptible_api_call(agent, api_kwargs: dict):
     """
     Run the API call in a background thread so the main conversation loop
@@ -149,7 +192,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
             request_client_holder["owner_tid"] = threading.get_ident()
         return client
 
-    def _close_request_client_once(reason: str) -> None:
+    def _close_request_client_once(reason: str, *, block_on_abort: bool = True) -> None:
         # #29507: dispatch on the calling thread.
         #
         # When ``_call`` (the worker) reaches its ``finally`` it owns the
@@ -177,7 +220,10 @@ def interruptible_api_call(agent, api_kwargs: dict):
         if request_client is None:
             return
         if stranger_thread:
-            agent._abort_request_openai_client(request_client, reason=reason)
+            if block_on_abort:
+                agent._abort_request_openai_client(request_client, reason=reason)
+            else:
+                _abort_request_client_without_blocking(agent, request_client, reason)
         else:
             agent._close_request_openai_client(request_client, reason=reason)
 
@@ -389,7 +435,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
                     f"Reconnecting."
                 )
             try:
-                _close_request_client_once("codex_ttfb_kill")
+                _close_request_client_once("codex_ttfb_kill", block_on_abort=False)
             except Exception:
                 pass
             agent._touch_activity(
@@ -435,7 +481,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
                 f"Reconnecting."
             )
             try:
-                _close_request_client_once("codex_stream_idle_kill")
+                _close_request_client_once("codex_stream_idle_kill", block_on_abort=False)
             except Exception:
                 pass
             agent._touch_activity(
@@ -483,7 +529,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
                     agent._anthropic_client.close()
                     agent._rebuild_anthropic_client()
                 else:
-                    _close_request_client_once("stale_call_kill")
+                    _close_request_client_once("stale_call_kill", block_on_abort=False)
             except Exception:
                 pass
             agent._touch_activity(
@@ -514,7 +560,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
                     agent._anthropic_client.close()
                     agent._rebuild_anthropic_client()
                 else:
-                    _close_request_client_once("interrupt_abort")
+                    _close_request_client_once("interrupt_abort", block_on_abort=False)
             except Exception:
                 pass
             raise InterruptedError("Agent interrupted during API call")
@@ -1633,7 +1679,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             request_client_holder["owner_tid"] = threading.get_ident()
         return client
 
-    def _close_request_client_once(reason: str) -> None:
+    def _close_request_client_once(reason: str, *, block_on_abort: bool = True) -> None:
         # See #29507 explanation in the non-streaming variant above. A
         # stranger thread (the interrupt-check / stale-stream detector loop)
         # only aborts sockets — never pops, never calls ``client.close()`` —
@@ -1652,7 +1698,10 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
         if request_client is None:
             return
         if stranger_thread:
-            agent._abort_request_openai_client(request_client, reason=reason)
+            if block_on_abort:
+                agent._abort_request_openai_client(request_client, reason=reason)
+            else:
+                _abort_request_client_without_blocking(agent, request_client, reason)
         else:
             agent._close_request_openai_client(request_client, reason=reason)
 
@@ -2166,7 +2215,10 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                             mid_tool_call=True,
                             diag=request_client_holder.get("diag"),
                         )
-                        _close_request_client_once("stream_mid_tool_retry_cleanup")
+                        _close_request_client_once(
+                            "stream_mid_tool_retry_cleanup",
+                            block_on_abort=False,
+                        )
                         try:
                             agent._replace_primary_openai_client(
                                 reason="stream_mid_tool_retry_pool_cleanup"
@@ -2217,7 +2269,10 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                                 diag=request_client_holder.get("diag"),
                             )
                             # Close the stale request client before retry
-                            _close_request_client_once("stream_retry_cleanup")
+                            _close_request_client_once(
+                                "stream_retry_cleanup",
+                                block_on_abort=False,
+                            )
                             # Also rebuild the primary client to purge
                             # any dead connections from the pool.
                             try:
@@ -2355,7 +2410,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 f"Reconnecting..."
             )
             try:
-                _close_request_client_once("stale_stream_kill")
+                _close_request_client_once("stale_stream_kill", block_on_abort=False)
             except Exception:
                 pass
             # Rebuild the primary client too — its connection pool
@@ -2377,7 +2432,10 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                     agent._anthropic_client.close()
                     agent._rebuild_anthropic_client()
                 else:
-                    _close_request_client_once("stream_interrupt_abort")
+                    _close_request_client_once(
+                        "stream_interrupt_abort",
+                        block_on_abort=False,
+                    )
             except Exception:
                 pass
             raise InterruptedError("Agent interrupted during streaming API call")

@@ -209,6 +209,47 @@ class TestInactivityTimeout:
         _cron_timeout = self._parse_cron_timeout(raw)
         assert _cron_timeout == 600.0
 
+    def test_timeout_config_used_when_env_absent(self, monkeypatch):
+        """cron.inactivity_timeout_seconds is the persistent config setting."""
+        from cron import scheduler
+
+        monkeypatch.delenv("HERMES_CRON_TIMEOUT", raising=False)
+        monkeypatch.setattr(
+            scheduler,
+            "load_config",
+            lambda: {"cron": {"inactivity_timeout_seconds": 3600}},
+        )
+
+        assert scheduler._resolve_cron_inactivity_timeout() == 3600.0
+
+    def test_timeout_env_overrides_config(self, monkeypatch):
+        """HERMES_CRON_TIMEOUT keeps backward-compatible highest priority."""
+        from cron import scheduler
+
+        monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1200")
+        monkeypatch.setattr(
+            scheduler,
+            "load_config",
+            lambda: {"cron": {"inactivity_timeout_seconds": 3600}},
+        )
+
+        assert scheduler._resolve_cron_inactivity_timeout() == 1200.0
+
+    def test_timeout_config_zero_means_unlimited(self, monkeypatch):
+        """cron.inactivity_timeout_seconds=0 resolves to unlimited."""
+        from cron import scheduler
+
+        monkeypatch.delenv("HERMES_CRON_TIMEOUT", raising=False)
+        monkeypatch.setattr(
+            scheduler,
+            "load_config",
+            lambda: {"cron": {"inactivity_timeout_seconds": 0}},
+        )
+
+        _cron_timeout = scheduler._resolve_cron_inactivity_timeout()
+        _cron_inactivity_limit = _cron_timeout if _cron_timeout > 0 else None
+        assert _cron_inactivity_limit is None
+
     def test_timeout_error_includes_diagnostics(self):
         """The TimeoutError message should include last activity info."""
         agent = SlowFakeAgent(
