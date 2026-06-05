@@ -57,6 +57,67 @@ def _cron_api(**kwargs):
     return json.loads(cronjob_tool(**kwargs))
 
 
+def _probe_tick_lock() -> tuple[str, Path, str | None]:
+    """Return whether the cron tick sidecar file is currently locked.
+
+    States:
+      - available: the sidecar exists, but the advisory OS lock is not held
+      - held: another scheduler tick/job currently holds the advisory lock
+      - missing: no sidecar file has been created yet
+      - unknown: platform or filesystem state prevented a reliable probe
+    """
+    from cron.scheduler import _get_lock_paths
+
+    _lock_dir, lock_file = _get_lock_paths()
+    if not lock_file.exists():
+        return "missing", lock_file, None
+
+    try:
+        handle = lock_file.open("r+b")
+    except OSError as exc:
+        return "unknown", lock_file, str(exc)
+
+    locked = False
+    try:
+        try:
+            import fcntl  # type: ignore
+        except ImportError:
+            fcntl = None
+        try:
+            import msvcrt  # type: ignore
+        except ImportError:
+            msvcrt = None
+
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except OSError as exc:
+                return "held", lock_file, str(exc)
+        elif msvcrt is not None:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                locked = True
+            except OSError as exc:
+                return "held", lock_file, str(exc)
+        else:
+            return "unknown", lock_file, "no supported file-lock module"
+
+        return "available", lock_file, None
+    finally:
+        if locked:
+            try:
+                if "fcntl" in locals() and fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                elif "msvcrt" in locals() and msvcrt is not None:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        handle.close()
+
+
 def cron_list(show_all: bool = False):
     """List all scheduled jobs."""
     from cron.jobs import list_jobs
@@ -180,6 +241,17 @@ def cron_status():
             print(f"  Next run: {min(next_runs)}")
     else:
         print("  No active jobs")
+
+    lock_state, lock_path, lock_detail = _probe_tick_lock()
+    if lock_state == "available":
+        print(f"  Tick lock: available ({lock_path}; sidecar file is not held)")
+    elif lock_state == "held":
+        print(color(f"  Tick lock: held by an active scheduler tick/job ({lock_path})", Colors.YELLOW))
+    elif lock_state == "missing":
+        print(f"  Tick lock: not present yet ({lock_path})")
+    else:
+        detail = f": {lock_detail}" if lock_detail else ""
+        print(color(f"  Tick lock: unknown ({lock_path}){detail}", Colors.YELLOW))
 
     print()
 

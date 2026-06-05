@@ -17,6 +17,38 @@ def tmp_cron_dir(tmp_path, monkeypatch):
 
 
 class TestCronCommandLifecycle:
+    def test_status_reports_tick_lock_available(self, tmp_cron_dir, monkeypatch, capsys):
+        create_job(prompt="Check server status", schedule="every 1h")
+        lock_file = tmp_cron_dir / "cron" / ".tick.lock"
+
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [123])
+        monkeypatch.setattr(
+            "hermes_cli.cron._probe_tick_lock",
+            lambda: ("available", lock_file, None),
+        )
+
+        cron_command(Namespace(cron_command="status"))
+
+        out = capsys.readouterr().out
+        assert "Gateway is running" in out
+        assert "Tick lock: available" in out
+        assert "sidecar file is not held" in out
+
+    def test_status_reports_tick_lock_held(self, tmp_cron_dir, monkeypatch, capsys):
+        create_job(prompt="Check server status", schedule="every 1h")
+        lock_file = tmp_cron_dir / "cron" / ".tick.lock"
+
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [123])
+        monkeypatch.setattr(
+            "hermes_cli.cron._probe_tick_lock",
+            lambda: ("held", lock_file, "locked"),
+        )
+
+        cron_command(Namespace(cron_command="status"))
+
+        out = capsys.readouterr().out
+        assert "Tick lock: held by an active scheduler tick/job" in out
+
     def test_pause_resume_run(self, tmp_cron_dir, capsys):
         job = create_job(prompt="Check server status", schedule="every 1h")
 
