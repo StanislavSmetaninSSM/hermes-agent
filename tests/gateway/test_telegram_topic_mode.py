@@ -449,6 +449,79 @@ async def test_new_inside_telegram_topic_rewrites_binding_to_new_session(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_context_overflow_auto_reset_rewrites_topic_binding(tmp_path, monkeypatch):
+    """A compression-exhausted auto-reset must not leave a stale topic binding.
+
+    If the binding keeps pointing at the oversized session, the next inbound
+    message switches straight back to the failed transcript and repeats the
+    context-overflow loop.
+    """
+    import gateway.run as gateway_run
+
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    session_db.enable_telegram_topic_mode(chat_id="208214988", user_id="208214988")
+    session_db.create_session(
+        session_id="old-topic-session",
+        source="telegram",
+        user_id="208214988",
+    )
+    session_db.create_session(
+        session_id="new-topic-session",
+        source="telegram",
+        user_id="208214988",
+    )
+    topic_source = _make_source(thread_id="17585")
+    topic_key = build_session_key(topic_source)
+    session_db.bind_telegram_topic(
+        chat_id="208214988",
+        thread_id="17585",
+        user_id="208214988",
+        session_key=topic_key,
+        session_id="old-topic-session",
+    )
+
+    runner = _make_runner(session_db=session_db)
+    new_entry = SessionEntry(
+        session_key=topic_key,
+        session_id="new-topic-session",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        origin=topic_source,
+    )
+    runner.session_store.reset_session.return_value = new_entry
+    runner._run_agent = AsyncMock(
+        return_value={
+            "failed": True,
+            "compression_exhausted": True,
+            "error": "Context length exceeded. Cannot compress further.",
+            "final_response": "Context length exceeded.",
+            "messages": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+        }
+    )
+
+    monkeypatch.setattr(
+        gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"}
+    )
+
+    result = await runner._handle_message(
+        _make_event("follow up after exhausted compression", thread_id="17585")
+    )
+
+    binding = session_db.get_telegram_topic_binding(
+        chat_id="208214988", thread_id="17585",
+    )
+    assert binding is not None
+    assert binding["session_id"] == "new-topic-session"
+    assert "Session auto-reset" in result
+    runner.session_store.reset_session.assert_called_once_with(topic_key)
+    runner._clear_session_boundary_security_state.assert_called_once_with(topic_key)
+
+
+@pytest.mark.asyncio
 async def test_topic_binding_follows_compression_tip_on_read(tmp_path, monkeypatch):
     """Stale topic bindings auto-heal to the compression child on next inbound.
 

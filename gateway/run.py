@@ -9522,12 +9522,24 @@ class GatewayRunner:
                     "Auto-resetting session %s after compression exhaustion.",
                     session_entry.session_id,
                 )
-                self.session_store.reset_session(session_key)
+                new_entry = self.session_store.reset_session(session_key)
                 self._evict_cached_agent(session_key)
+                queued_events = getattr(self, "_queued_events", None)
+                if queued_events is not None:
+                    queued_events.pop(session_key, None)
                 self._session_model_overrides.pop(session_key, None)
                 self._set_session_reasoning_override(session_key, None)
                 if hasattr(self, "_pending_model_notes"):
                     self._pending_model_notes.pop(session_key, None)
+                self._clear_session_boundary_security_state(session_key)
+                if self._is_telegram_topic_lane(source) and new_entry is not None:
+                    try:
+                        self._record_telegram_topic_binding(source, new_entry)
+                    except Exception:
+                        logger.debug(
+                            "Failed to rebind Telegram topic after context-overflow auto-reset",
+                            exc_info=True,
+                        )
                 response = (response or "") + (
                     "\n\n🔄 Session auto-reset — the conversation exceeded the "
                     "maximum context size and could not be compressed further. "
